@@ -37,7 +37,7 @@ To validate the findings from the Random Forest model, a logistic regression ana
 
 Together, this multi-step analytic strategy aims to both explore and confirm key predictors of BZRA discontinuation among older adults, leveraging the strengths of both machine learning and traditional inferential statistics.
 
-
+## Data Loading and Packages
 ```{r}
 #| label: Data Loading and Packages
 
