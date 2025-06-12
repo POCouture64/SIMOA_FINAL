@@ -1,0 +1,53 @@
+---
+title: "SIMOA FINAL"
+author: "PO Couture"
+format: html
+editor: visual
+---
+
+## SIMOA FINAL
+
+*** Planned Analyses ***
+All statistical analyses will be conducted using multiply imputed data to account for missingness across variables. Multiple imputation is used to reduce bias and improve statistical power by generating plausible values based on the observed data distribution. The imputation model includes all variables of interest, consistent with current best practices for handling missing data in psychological and health research.
+
+Group Comparisons
+To examine whether older adults who discontinued their use of benzodiazepine receptor agonists (BZRA) differ from those who continued use, a series of independent samples t-tests will be conducted. These analyses will compare the two groups on a range of psychological and personality variables, including:
+
+BFI-10 (Big Five Inventory - 10-item short form),
+
+SURPS (Substance Use Risk Profile Scale),
+
+PHQ-2 (Patient Health Questionnaire – depression screener),
+
+OSSS-3 (Oslo Social Support Scale),
+
+DBAS-16 (Dysfunctional Beliefs and Attitudes about Sleep),
+
+CISS-21 (Coping Inventory for Stressful Situations).
+
+Additional between-group comparisons will be conducted on demographic and health-related variables (e.g., age, gender, sleep quality, comorbidities) to identify any systematic differences that may be associated with BZRA cessation status.
+
+*** Predictive Modelling ***
+To identify the most important variables associated with successful BZRA cessation, a Random Forest classification model will be employed. Random Forest is a non-parametric ensemble machine learning method that handles complex interactions and non-linear relationships, and is robust to multicollinearity and overfitting.
+
+The Random Forest model will be trained using all personality, psychological, demographic, and health-related variables as predictors, with BZRA cessation (yes/no) as the outcome. Variable importance scores will be used to rank predictors based on their contribution to classification accuracy.
+
+*** Model Confirmation ***
+To validate the findings from the Random Forest model, a logistic regression analysis will be conducted using the top predictors identified by the Random Forest. This traditional regression model will allow for the estimation of effect sizes (odds ratios) and the statistical significance of each variable’s unique contribution to BZRA cessation. Confidence intervals and p-values will be reported, and model diagnostics will be used to assess model fit.
+
+Together, this multi-step analytic strategy aims to both explore and confirm key predictors of BZRA discontinuation among older adults, leveraging the strengths of both machine learning and traditional inferential statistics.
+
+
+
+```{r}
+1 + 1
+```
+
+You can add options to executable code like this
+
+```{r}
+#| echo: false
+2 * 2
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
