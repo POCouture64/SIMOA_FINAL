@@ -49,17 +49,16 @@ library(readr)
 SIMOA_Report <- read_csv("SIMOA Report.csv")
 View(SIMOA_Report)
 
-
-
-
-
 ```
 
-You can add options to executable code like this
 
-```{r}
-#| echo: false
-2 * 2
-```
+## 
 
-The `echo: false` option disables the printing of code (only output is displayed).
+
+
+
+
+
+
+
+
