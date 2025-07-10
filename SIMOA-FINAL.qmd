@@ -46,6 +46,7 @@ In this section I am loading all the necessary packages for my analysis and load
 install.packages("MissMech")
 
 library(dplyr)
+library(effsize)
 library(ggplot2)
 library(mice)
 library(MissMech)
@@ -387,10 +388,23 @@ cat("Created 'modeling_dataset' with 16 main psychological scales (no demographi
 cat("This may be more appropriate for your random forest model.\n")
 ```
 
+## Group Comparison
+```{r}
+#| label: Data Preparation
+# Merge outcome variable with imputed dataset
+analysis_dataset <- final_dataset_imputed %>%
+  mutate(scrn_stopped_bzra = Dataset$scrn_stopped_bzra)
 
+# Remove cases with missing outcome variable
+analysis_dataset <- analysis_dataset %>%
+  filter(!is.na(scrn_stopped_bzra))
 
+# Check the merge worked
+cat("=== DATASET MERGE CHECK ===\n")
+cat("Analysis dataset size:", nrow(analysis_dataset), "\n")
+cat("Outcome variable distribution:\n")
+table(analysis_dataset$scrn_stopped_bzra, useNA = "always")
 
-
-
-
-
+```
+```{r}
+#| label: Setup
