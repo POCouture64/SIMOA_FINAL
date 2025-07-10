@@ -51,6 +51,7 @@ library(mice)
 library(MissMech)
 library(naniar)
 library(readr)
+library(stringr)
 library(tidyverse)
 library(VIM)
 
@@ -76,12 +77,180 @@ Dataset <- SIMOA_Report %>%
 ```
 
 ## Data Cleaning
-Below is the section where I will get rid of all the columns where nobody answered the question and all the values are NA. Alternatively I will try to divide based on who stopped and who did not and then from there remove the columns which they did not have the opportunity to answer.
+Below is the section where I will separate the questions into the categories the participants truly saw to avoid higher values for missingness which would be incorrect.
 ```{r}
 #| label: Data Cleaning
 
-#This section will group the questions into which ones were seen by those who answered yes to the "scrn_stopped_bzra" question and have stopped BZRA use.
-yes_questions <- c""
+# I will begin changing all the 'Select all that apply" questions to factors with 1 indicating an answer was provided and 0 meaning that none of the options were selected by the participant (likely not shown the questions)
+# Define all variable prefixes
+prefixes <- c(
+  "liv_sit___", "sleep_health_con___", "def_insomnia___", "phys_health_con___",
+  "ment_health_con___", "alt_nic_use___", "can_use_rsn___", "c_sp___",
+  "tablet_split___", "tablet_split_2___", "stop_wdl_exp_2___", "stopping_aids_2___", "other_sub___"
+)
+
+# Flatten into a single list of all relevant column names
+all_factor_columns <- names(Dataset)[
+  sapply(names(Dataset), function(col) any(startsWith(col, prefixes)))
+]
+
+# Convert to factors: 1 = "Selected", 0 = "Not selected"
+Dataset <- Dataset %>%
+  mutate(across(all_of(all_factor_columns), ~ factor(., levels = c(0, 1), labels = c("Not selected", "Selected"))))
+
+# Check that it worked
+str(Dataset[all_factor_columns])
+
+saveRDS(Dataset, "cleaned_dataset.rds")
+Dataset <- readRDS("cleaned_dataset.rds")
+
+attr(Dataset, "spec") <- NULL
+
+################################################################################
+################################################################################
+
+# This next section will remove the columns with only N/A values showing that they were not answered by anyone regardless of group and are not needed for our analysis.
+# Identify columns with all NA
+cols_all_na <- names(Dataset)[colSums(!is.na(Dataset)) == 0]
+print(cols_all_na)
+
+# Then remove them
+Dataset <- Dataset[, colSums(!is.na(Dataset)) > 0]
+
+################################################################################
+################################################################################
+
+# This section will group the questions into which ones were seen by those who answered "2" or using their BZRA more than 1 time per month to the "freq_dich" question.
+# === Load REDCap data dictionary ===
+dict <- read.csv("Data_Dict.csv", stringsAsFactors = FALSE)
+
+# Rename the branching logic column for easier access
+names(dict)[names(dict) == "Branching.Logic..Show.field.only.if...."] <- "branching_logic"
+
+# Normalize branching logic text to lowercase for consistent pattern matching
+dict$branching_logic <- tolower(dict$branching_logic)
+
+# === Extract questions based on branching logic ===
+
+# 1. Questions shown only if freq_dich = '2'
+freq_use_questions <- dict$Variable...Field.Name[
+  grepl("\\[freq_dich\\]\\s*=\\s*'2'", dict$branching_logic)
+]
+
+# 2. Questions shown only if freq_dich = '0' OR freq_dich = '1'
+not_freq_use_questions <- dict$Variable...Field.Name[
+  grepl("\\[freq_dich\\]\\s*=\\s*'0'|\\[freq_dich\\]\\s*=\\s*'1'", dict$branching_logic)
+]
+
+# 3. Questions shown to everyone (no branching logic or no freq_dich condition)
+common_questions <- dict$Variable...Field.Name[
+  is.na(dict$branching_logic) | dict$branching_logic == "" | !grepl("\\[freq_dich\\]", dict$branching_logic)
+]
+
+# === OPTIONAL: Filter to variables actually present in your dataset ===
+vars_in_dataset <- names(Dataset)
+
+freq_use_questions <- freq_use_questions[freq_use_questions %in% vars_in_dataset]
+not_freq_use_questions <- not_freq_use_questions[not_freq_use_questions %in% vars_in_dataset]
+common_questions <- common_questions[common_questions %in% vars_in_dataset]
+
+# === Check results ===
+cat("Number of freq_use_questions:", length(freq_use_questions), "\n")
+cat("Number of not_freq_use_questions:", length(not_freq_use_questions), "\n")
+cat("Number of common_questions:", length(common_questions), "\n")
+
+################################################################################
+################################################################################
+
+# I need to futher the branching logic because men and women were shown seperate questions so below is how I have gone about ensuring that missingness is only calculated for the questions participants could have been shown
+
+# Function to convert REDCap branching logic to R expression string
+convert_branching_logic <- function(expr) {
+  if (is.na(expr) || expr == "") return(NULL) # no branching logic means always shown
+  
+  expr_r <- expr %>%
+    tolower() %>%                                    # lowercase for consistency
+    str_replace_all("\\[([^\\]]+)\\]", "Dataset[['\\1']]") %>% # replace [var]
+    str_replace_all("=", "==") %>%                   # replace = with ==
+    str_replace_all("!====", "!=") %>%               # fix != if broken by replacement
+    str_replace_all("'([0-9]+)'", "\\1") %>%         # remove quotes around numbers
+    str_replace_all("\\band\\b", "&") %>%            # replace logical AND
+    str_replace_all("\\bor\\b", "|")                  # replace logical OR
+  
+  expr_r
+}
+
+# Number of participants
+n <- nrow(Dataset)
+
+# Initialize list to store applicability vectors
+applicability_list <- vector("list", length = nrow(dict))
+names(applicability_list) <- dict$Variable...Field.Name
+
+# Loop over all questions
+for (i in seq_len(nrow(dict))) {
+  varname <- dict$Variable...Field.Name[i]
+  logic <- dict$branching_logic[i]
+  
+  if (is.na(logic) || logic == "") {
+    # No branching logic → all TRUE
+    applicability_list[[varname]] <- rep(TRUE, n)
+  } else {
+    # Convert to R logical expression string
+    expr_r <- convert_branching_logic(logic)
+    
+    if (is.null(expr_r)) {
+      applicability_list[[varname]] <- rep(TRUE, n)
+    } else {
+      # Evaluate expression safely
+      # Wrap in tryCatch to handle any parse/eval errors
+      applicable_vec <- tryCatch(
+        eval(parse(text = expr_r)),
+        error = function(e) {
+          warning(sprintf("Failed to evaluate branching logic for %s: %s", varname, e$message))
+          rep(FALSE, n)  # If error, assume not applicable
+        }
+      )
+      
+      # If evaluation result is not logical vector, fallback to all FALSE
+      if (!is.logical(applicable_vec) || length(applicable_vec) != n) {
+        warning(sprintf("Branching logic for %s did not return logical vector of length %d", varname, n))
+        applicable_vec <- rep(FALSE, n)
+      }
+      
+      applicability_list[[varname]] <- applicable_vec
+    }
+  }
+}
+
+# Convert list to data.frame or matrix for easy indexing
+applicability_matrix <- do.call(cbind, applicability_list)
+
+# Fix colnames for clarity
+colnames(applicability_matrix) <- names(applicability_list)
+
+## Description of the applicability matrix
+# applicability_matrix[i, j] = TRUE/FALSE if participant i should see question j
+
+##### TESTING TO SEE IF THE CODE WORKED #####
+#participants_zero <- which(Dataset$scrn_stopped_bzra == "0")
+## Subset responses for confirm_stop_attempt among these participants
+#responses_confirm <- Dataset$confirm_stop_attempt[participants_zero]
+
+## Check how many responded (not NA)
+#num_answered <- sum(!is.na(responses_confirm))
+#num_missing <- sum(is.na(responses_confirm))
+
+#cat("Number of participants with scrn_stopped_bzra == '0':", length(participants_zero), "\n")
+#cat("Among them, how many answered confirm_stop_attempt:", num_answered, "\n")
+#cat("And how many did NOT answer (missing):", num_missing, "\n")
+
+##### EXTRA CODE THAT MAY BE USEFUL #####
+## Example: Check how many participants should see each question
+#applicability_counts <- colSums(applicability_matrix)
+
+## Example: Filter questions that apply to at least some participants
+#questions_shown <- names(applicability_counts)[applicability_counts > 0]
 ```
 
 
