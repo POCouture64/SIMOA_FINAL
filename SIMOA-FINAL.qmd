@@ -98,6 +98,25 @@ data_processed <- data_processed %>%
     few_interests_rev = 6 - few_interests
   )
 
+# Verifying Reverse-Coding -- ALL GOOD!!
+# Check first 10 rows side by side
+data_processed %>%
+  select(reserved, reserved_rev, find_fault, find_fault_rev, lazy, lazy_rev, 
+         relaxed, relaxed_rev, few_interests, few_interests_rev) %>%
+  head(10)
+
+# Verify the math: original + reversed should equal 6
+data_processed %>%
+  mutate(
+    reserved_sum = reserved + reserved_rev,
+    find_fault_sum = find_fault + find_fault_rev,
+    lazy_sum = lazy + lazy_rev,
+    relaxed_sum = relaxed + relaxed_rev,
+    few_interests_sum = few_interests + few_interests_rev
+  ) %>%
+  select(ends_with("_sum")) %>%
+  summary()
+
 # ============================================================================
 # STEP 2: CREATE PERSONALITY TOTAL SCORES
 # ============================================================================
@@ -161,6 +180,22 @@ data_processed <- data_processed %>%
     surps23_rev = 5 - surps23
     # Note: surps17 is NOT reversed
   )
+
+# Verifying Reverse-Coding -- ALL GOOD!!
+data_processed %>%
+  select(surps1, surps1_rev, surps4, surps4_rev, surps7, surps7_rev) %>%
+  head(10) %>%
+  mutate(
+    check1 = surps1 + surps1_rev,
+    check4 = surps4 + surps4_rev,
+    check7 = surps7 + surps7_rev
+  )
+
+# Quick verification - all sums should equal 5
+cat("All sums should equal 5:\n")
+print(unique(data_processed$surps1 + data_processed$surps1_rev))
+print(unique(data_processed$surps4 + data_processed$surps4_rev))
+print(unique(data_processed$surps7 + data_processed$surps7_rev))
 
 # Create SURPS total scores
 data_processed <- data_processed %>%
