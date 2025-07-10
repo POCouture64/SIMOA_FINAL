@@ -7,11 +7,9 @@ editor: visual
 
 ## SIMOA FINAL
 
-*** Planned Analyses ***
-All statistical analyses will be conducted using multiply imputed data to account for missingness across variables. Multiple imputation is used to reduce bias and improve statistical power by generating plausible values based on the observed data distribution. The imputation model includes all variables of interest, consistent with current best practices for handling missing data in psychological and health research.
+\*\*\* Planned Analyses \*\*\* All statistical analyses will be conducted using multiply imputed data to account for missingness across variables. Multiple imputation is used to reduce bias and improve statistical power by generating plausible values based on the observed data distribution. The imputation model includes all variables of interest, consistent with current best practices for handling missing data in psychological and health research.
 
-Group Comparisons
-To examine whether older adults who discontinued their use of benzodiazepine receptor agonists (BZRA) differ from those who continued use, a series of independent samples t-tests will be conducted. These analyses will compare the two groups on a range of psychological and personality variables, including:
+Group Comparisons To examine whether older adults who discontinued their use of benzodiazepine receptor agonists (BZRA) differ from those who continued use, a series of independent samples t-tests will be conducted. These analyses will compare the two groups on a range of psychological and personality variables, including:
 
 BFI-10 (Big Five Inventory - 10-item short form),
 
@@ -27,18 +25,18 @@ CISS-21 (Coping Inventory for Stressful Situations).
 
 Additional between-group comparisons will be conducted on demographic and health-related variables (e.g., age, gender, sleep quality, comorbidities) to identify any systematic differences that may be associated with BZRA cessation status.
 
-*** Predictive Modelling ***
-To identify the most important variables associated with successful BZRA cessation, a Random Forest classification model will be employed. Random Forest is a non-parametric ensemble machine learning method that handles complex interactions and non-linear relationships, and is robust to multicollinearity and overfitting.
+\*\*\* Predictive Modelling \*\*\* To identify the most important variables associated with successful BZRA cessation, a Random Forest classification model will be employed. Random Forest is a non-parametric ensemble machine learning method that handles complex interactions and non-linear relationships, and is robust to multicollinearity and overfitting.
 
 The Random Forest model will be trained using all personality, psychological, demographic, and health-related variables as predictors, with BZRA cessation (yes/no) as the outcome. Variable importance scores will be used to rank predictors based on their contribution to classification accuracy.
 
-*** Model Confirmation ***
-To validate the findings from the Random Forest model, a logistic regression analysis will be conducted using the top predictors identified by the Random Forest. This traditional regression model will allow for the estimation of effect sizes (odds ratios) and the statistical significance of each variable’s unique contribution to BZRA cessation. Confidence intervals and p-values will be reported, and model diagnostics will be used to assess model fit.
+\*\*\* Model Confirmation \*\*\* To validate the findings from the Random Forest model, a logistic regression analysis will be conducted using the top predictors identified by the Random Forest. This traditional regression model will allow for the estimation of effect sizes (odds ratios) and the statistical significance of each variable’s unique contribution to BZRA cessation. Confidence intervals and p-values will be reported, and model diagnostics will be used to assess model fit.
 
 Together, this multi-step analytic strategy aims to both explore and confirm key predictors of BZRA discontinuation among older adults, leveraging the strengths of both machine learning and traditional inferential statistics.
 
 ## Data Loading, Screening and Packages
+
 In this section I am loading all the necessary packages for my analysis and loading in the data.
+
 ```{r}
 #| label: Data Loading and Packages
 
@@ -62,7 +60,8 @@ View(SIMOA_Report)
 
 ```
 
-Below I am creating a new object containing only the participants we can confirm are >= 65 and are using a BZRA by answering which specific BZRA they are using. This is to ensure they are not using other medications that may have sedative effects such as antihistamines or SSRI's.
+Below I am creating a new object containing only the participants we can confirm are \>= 65 and are using a BZRA by answering which specific BZRA they are using. This is to ensure they are not using other medications that may have sedative effects such as antihistamines or SSRI's.
+
 ```{r}
 #| label: Creating new object 
 
@@ -78,7 +77,9 @@ Dataset <- SIMOA_Report %>%
 ```
 
 ## Calculating Subscale Scores
+
 This section will calculate all the subscale scores for BFI-10, SURPS, DBAS-16, and CISS-21
+
 ```{r}
 #| label: BFI-10 Subscale
 
@@ -312,6 +313,7 @@ cat("  Emotional Style range (7 items, 1-5 scale, should be 7-35):", range(final
 ```
 
 ## Multiple Imputation
+
 ```{r}
 #| label: Multiple Imputation
 # ============================================================================
@@ -389,6 +391,7 @@ cat("This may be more appropriate for your random forest model.\n")
 ```
 
 ## Group Comparison
+
 ```{r}
 #| label: Data Preparation
 # Merge outcome variable with imputed dataset
@@ -406,5 +409,180 @@ cat("Outcome variable distribution:\n")
 table(analysis_dataset$scrn_stopped_bzra, useNA = "always")
 
 ```
+
 ```{r}
 #| label: Setup
+
+# Get variable names (excluding outcome)
+vars_to_compare <- names(analysis_dataset)[names(analysis_dataset) != "scrn_stopped_bzra"]
+
+# Create results dataframe
+results <- data.frame(
+  Variable = character(),
+  Type = character(),
+  Effect_Size = numeric(),
+  Effect_Magnitude = character(),
+  OR_or_Mean_Diff = numeric(),
+  CI_Lower = numeric(),
+  CI_Upper = numeric(),
+  P_Value = numeric(),
+  stringsAsFactors = FALSE
+)
+```
+
+```{r}
+#| label: Continous Variables
+
+cat("\n=== CONTINUOUS VARIABLES: COHEN'S D AND MEAN DIFFERENCES ===\n")
+for(var in vars_to_compare) {
+  if(is.numeric(analysis_dataset[[var]])) {
+    cat(sprintf("\n--- %s ---\n", var))
+    
+    # Manual Cohen's d calculation (using your working method)
+    group0 <- analysis_dataset[analysis_dataset$scrn_stopped_bzra == 0, var]
+    group1 <- analysis_dataset[analysis_dataset$scrn_stopped_bzra == 1, var]
+    
+    # Remove NAs
+    group0 <- group0[!is.na(group0)]
+    group1 <- group1[!is.na(group1)]
+    
+    # Calculate pooled standard deviation
+    pooled_sd <- sqrt(((length(group0)-1)*sd(group0)^2 + 
+                       (length(group1)-1)*sd(group1)^2) / 
+                      (length(group0) + length(group1) - 2))
+    
+    # Calculate Cohen's d
+    cohens_d <- (mean(group1) - mean(group0)) / pooled_sd
+    
+    # Determine magnitude
+    magnitude <- case_when(
+      abs(cohens_d) < 0.2 ~ "negligible",
+      abs(cohens_d) < 0.5 ~ "small",
+      abs(cohens_d) < 0.8 ~ "medium",
+      TRUE ~ "large"
+    )
+    
+    # T-test for mean difference and CI
+    t_result <- t.test(analysis_dataset[[var]] ~ analysis_dataset$scrn_stopped_bzra)
+    # Fix: Calculate mean difference correctly (group1 - group0)
+    mean_diff <- t_result$estimate[2] - t_result$estimate[1]  # Or use: -diff(t_result$estimate)
+    
+    # Group means (fix the printing issue)
+    group_means <- analysis_dataset %>%
+      group_by(scrn_stopped_bzra) %>%
+      summarise(mean = mean(!!sym(var), na.rm = TRUE), .groups = "drop")
+    
+    cat(sprintf("Cohen's d: %.3f (%s)\n", cohens_d, magnitude))
+    cat(sprintf("Mean difference (Group1 - Group0): %.3f (95%% CI: %.3f to %.3f)\n", 
+                mean_diff, t_result$conf.int[1], t_result$conf.int[2]))
+    cat("Group means:\n")
+    for(i in 1:nrow(group_means)) {
+      cat(sprintf("  Group %d: %.3f\n", group_means$scrn_stopped_bzra[i], group_means$mean[i]))
+    }
+    cat("\n")
+    
+    # Add to results
+    results <- rbind(results, data.frame(
+      Variable = var,
+      Type = "Continuous",
+      Effect_Size = cohens_d,
+      Effect_Magnitude = magnitude,
+      OR_or_Mean_Diff = mean_diff,
+      CI_Lower = t_result$conf.int[1],
+      CI_Upper = t_result$conf.int[2],
+      P_Value = t_result$p.value
+    ))
+  }
+}
+
+```
+
+```{r}
+#| label: Categorical Variables
+
+cat("\n=== CATEGORICAL VARIABLES: ODDS RATIOS ===\n")
+
+for(var in vars_to_compare) {
+  if(!is.numeric(analysis_dataset[[var]])) {
+    cat(sprintf("\n--- %s ---\n", var))
+    
+    # Create 2x2 table
+    cross_tab <- table(analysis_dataset[[var]], analysis_dataset$scrn_stopped_bzra)
+    
+    # Calculate proportions
+    props <- prop.table(cross_tab, margin = 2)
+    cat("Proportions by group:\n")
+    print(props)
+    
+    # Calculate OR for each category vs reference
+    if(nrow(cross_tab) == 2) {
+      # Binary variable
+      or_result <- fisher.test(cross_tab)
+      cat(sprintf("Odds Ratio: %.3f (95%% CI: %.3f to %.3f)\n", 
+                  or_result$estimate, or_result$conf.int[1], or_result$conf.int[2]))
+      
+      # Add to results
+      results <- rbind(results, data.frame(
+        Variable = var,
+        Type = "Binary",
+        Effect_Size = or_result$estimate,
+        Effect_Magnitude = ifelse(or_result$estimate > 2 | or_result$estimate < 0.5, "Large", 
+                                 ifelse(or_result$estimate > 1.5 | or_result$estimate < 0.67, "Medium", "Small")),
+        OR_or_Mean_Diff = or_result$estimate,
+        CI_Lower = or_result$conf.int[1],
+        CI_Upper = or_result$conf.int[2],
+        P_Value = or_result$p.value
+      ))
+      
+    } else {
+      # Multi-category variable - calculate OR for each level
+      cat("Multi-category variable - ORs calculated against first category:\n")
+      
+      for(i in 2:nrow(cross_tab)) {
+        # Create 2x2 table for this category vs reference
+        temp_tab <- rbind(cross_tab[1,], cross_tab[i,])
+        or_result <- fisher.test(temp_tab)
+        
+        cat(sprintf("%s vs %s: OR = %.3f (95%% CI: %.3f to %.3f)\n", 
+                    rownames(cross_tab)[i], rownames(cross_tab)[1],
+                    or_result$estimate, or_result$conf.int[1], or_result$conf.int[2]))
+      }
+    }
+  }
+}
+
+```
+
+```{r}
+#| label: Summarry of Meaningful Differences
+
+cat("\n=== SUMMARY OF MEANINGFUL EFFECTS ===\n")
+
+# Continuous variables with meaningful effect sizes
+cat("Continuous variables with Cohen's d ≥ 0.3 (small to large effects):\n")
+continuous_effects <- results[results$Type == "Continuous" & abs(results$Effect_Size) >= 0.3, ]
+if(nrow(continuous_effects) > 0) {
+  print(continuous_effects[, c("Variable", "Effect_Size", "Effect_Magnitude", "OR_or_Mean_Diff")])
+} else {
+  cat("No continuous variables with meaningful effect sizes\n")
+}
+
+# Categorical variables with meaningful associations
+cat("\nCategorical variables with OR ≤ 0.67 or OR ≥ 1.5 (meaningful associations):\n")
+categorical_effects <- results[results$Type == "Binary" & (results$Effect_Size <= 0.67 | results$Effect_Size >= 1.5), ]
+if(nrow(categorical_effects) > 0) {
+  print(categorical_effects[, c("Variable", "OR_or_Mean_Diff", "CI_Lower", "CI_Upper", "Effect_Magnitude")])
+} else {
+  cat("No categorical variables with meaningful odds ratios\n")
+}
+
+```
+
+
+
+
+
+
+
+
+
