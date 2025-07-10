@@ -34,3 +34,4 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 SIMOA_FINAL.Rproj
+.DS_Store
