@@ -37,13 +37,22 @@ To validate the findings from the Random Forest model, a logistic regression ana
 
 Together, this multi-step analytic strategy aims to both explore and confirm key predictors of BZRA discontinuation among older adults, leveraging the strengths of both machine learning and traditional inferential statistics.
 
-## Data Loading and Packages
+## Data Loading, Screening and Packages
+In this section I am loading all the necessary packages for my analysis and loading in the data.
 ```{r}
 #| label: Data Loading and Packages
 
 # Installing and Loading Packages
-library(readr)
+install.packages("MissMech")
 
+library(dplyr)
+library(ggplot2)
+library(mice)
+library(MissMech)
+library(naniar)
+library(readr)
+library(tidyverse)
+library(VIM)
 
 # Data Loading
 SIMOA_Report <- read_csv("SIMOA Report.csv")
@@ -51,9 +60,37 @@ View(SIMOA_Report)
 
 ```
 
+Below I am creating a new object containing only the participants we can confirm are >= 65 and are using a BZRA by answering which specific BZRA they are using. This is to ensure they are not using other medications that may have sedative effects such as antihistamines or SSRI's.
+```{r}
+#| label: Creating new object 
 
-## 
+Dataset <- SIMOA_Report %>%
+  # Apply filtering based on age_cat and age
+  filter(
+    age_cat == 1 | (age_cat == 0 & age >= 65)
+  ) %>%
+  # Apply filtering to keep only rows where any of c_sp___1 to c_sp___14 == 1
+  filter(
+    rowSums(select(., starts_with("c_sp___"))[, 1:14] == 1, na.rm = TRUE) > 0
+  )
+```
 
+## Data Cleaning
+Below is the section where I will get rid of all the columns where nobody answered the question and all the values are NA. Alternatively I will try to divide based on who stopped and who did not and then from there remove the columns which they did not have the opportunity to answer.
+```{r}
+#| label: Data Cleaning
+
+#This section will group the questions into which ones were seen by those who answered yes to the "scrn_stopped_bzra" question and have stopped BZRA use.
+yes_questions <- c""
+```
+
+
+## Multiple Imputation 
+```{r}
+#| label: 
+
+
+```
 
 
 
