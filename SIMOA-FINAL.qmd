@@ -76,285 +76,280 @@ Dataset <- SIMOA_Report %>%
   )
 ```
 
-## Data Cleaning
-Below is the section where I will separate the questions into the categories the participants truly saw to avoid higher values for missingness which would be incorrect.
+## Calculating Subscale Scores
+This section will calculate all the subscale scores for BFI-10, SURPS, DBAS-16, and CISS-21
 ```{r}
-#| label: Making Sata Questions Into Factors
+#| label: BFI-10 Subscale
 
-# I will begin changing all the 'Select all that apply" questions to factors with 1 indicating an answer was provided and 0 meaning that none of the options were selected by the participant (likely not shown the questions)
-# Define all variable prefixes
-prefixes <- c(
-  "liv_sit___", "sleep_health_con___", "def_insomnia___", "phys_health_con___",
-  "ment_health_con___", "alt_nic_use___", "can_use_rsn___", "c_sp___",
-  "tablet_split___", "tablet_split_2___", "stop_wdl_exp_2___", "stopping_aids_2___", "other_sub___"
-)
+# First, let's create a working copy
+data_processed <- Dataset
+# ============================================================================
+# STEP 1: REVERSE CODE PERSONALITY ITEMS (1-5 scale)
+# ============================================================================
+# Items to reverse: reserved, find_fault, lazy, relaxed, few_interests
+# Formula: reversed_score = 6 - original_score
 
-# Flatten into a single list of all relevant column names
-all_factor_columns <- names(Dataset)[
-  sapply(names(Dataset), function(col) any(startsWith(col, prefixes)))
-]
+data_processed <- data_processed %>%
+  mutate(
+    reserved_rev = 6 - reserved,
+    find_fault_rev = 6 - find_fault,
+    lazy_rev = 6 - lazy,
+    relaxed_rev = 6 - relaxed,
+    few_interests_rev = 6 - few_interests
+  )
 
-# Convert to factors: 1 = "Selected", 0 = "Not selected"
-Dataset <- Dataset %>%
-  mutate(across(all_of(all_factor_columns), ~ factor(., levels = c(0, 1), labels = c("Not selected", "Selected"))))
-
-# Check that it worked
-str(Dataset[all_factor_columns])
-
-saveRDS(Dataset, "cleaned_dataset.rds")
-Dataset <- readRDS("cleaned_dataset.rds")
-
-attr(Dataset, "spec") <- NULL
-
-################################################################################
-################################################################################
-#| label: Removing Columns With Only N/A
-# This next section will remove the columns with only N/A values showing that they were not answered by anyone regardless of group and are not needed for our analysis.
-# Identify columns with all NA
-cols_all_na <- names(Dataset)[colSums(!is.na(Dataset)) == 0]
-print(cols_all_na)
-
-# Then remove them
-Dataset <- Dataset[, colSums(!is.na(Dataset)) > 0]
-
-################################################################################
-################################################################################
-#| label: Branching Logic Seperation for the Questions Based on Frequency of Use
-# This section will group the questions into which ones were seen by those who answered "2" or using their BZRA more than 1 time per month to the "freq_dich" question.
-# === Load REDCap data dictionary ===
-dict <- read.csv("Data_Dict.csv", stringsAsFactors = FALSE)
-
-# Rename the branching logic column for easier access
-names(dict)[names(dict) == "Branching.Logic..Show.field.only.if...."] <- "branching_logic"
-
-# Normalize branching logic text to lowercase for consistent pattern matching
-dict$branching_logic <- tolower(dict$branching_logic)
-
-# === Extract questions based on branching logic ===
-
-# 1. Questions shown only if freq_dich = '2'
-freq_use_questions <- dict$Variable...Field.Name[
-  grepl("\\[freq_dich\\]\\s*=\\s*'2'", dict$branching_logic)
-]
-
-# 2. Questions shown only if freq_dich = '0' OR freq_dich = '1'
-not_freq_use_questions <- dict$Variable...Field.Name[
-  grepl("\\[freq_dich\\]\\s*=\\s*'0'|\\[freq_dich\\]\\s*=\\s*'1'", dict$branching_logic)
-]
-
-# 3. Questions shown to everyone (no branching logic or no freq_dich condition)
-common_questions <- dict$Variable...Field.Name[
-  is.na(dict$branching_logic) | dict$branching_logic == "" | !grepl("\\[freq_dich\\]", dict$branching_logic)
-]
-
-# === OPTIONAL: Filter to variables actually present in your dataset ===
-vars_in_dataset <- names(Dataset)
-
-freq_use_questions <- freq_use_questions[freq_use_questions %in% vars_in_dataset]
-not_freq_use_questions <- not_freq_use_questions[not_freq_use_questions %in% vars_in_dataset]
-common_questions <- common_questions[common_questions %in% vars_in_dataset]
-
-# === Check results ===
-cat("Number of freq_use_questions:", length(freq_use_questions), "\n")
-cat("Number of not_freq_use_questions:", length(not_freq_use_questions), "\n")
-cat("Number of common_questions:", length(common_questions), "\n")
-
-################################################################################
-################################################################################
-#| label: Branching Logic For All Other Questions
-# I need to further the branching logic because men and women were shown separate questions so below is how I have gone about ensuring that missingness is only calculated for the questions participants could have been shown
-
-# Number of participants
-n <- nrow(Dataset)
-
-# --- Create logical indicator for other_sub_use upfront ---
-
-# Checkbox columns for other_sub
-checkbox_cols <- paste0("other_sub___", 0:8)
-checkbox_cols <- checkbox_cols[checkbox_cols %in% colnames(Dataset)]  # ensure columns exist
-
-# Logical vector if "Other" checkbox (___8) is selected
-Dataset$other_sub_use <- FALSE
-if ("other_sub___8" %in% colnames(Dataset)) {
-  Dataset$other_sub_use <- Dataset[["other_sub___8"]] == 1
-  Dataset$other_sub_use[is.na(Dataset$other_sub_use)] <- FALSE
-}
-
-# --- Function to convert REDCap branching logic to R expression string ---
-convert_branching_logic <- function(expr) {
-  if (is.na(expr) || expr == "") return(NULL)
-
-  expr_r <- expr %>%
-    tolower() %>%
-    # Explicitly replace [other_sub_use] first
-    str_replace_all("\\[other_sub_use\\]", "Dataset[['other_sub_use']]") %>%
-    # Replace [var(num)] with triple underscores
-    str_replace_all("\\[([a-z0-9_]+)\\((\\d+)\\)\\]", "Dataset[['\\1___\\2']]") %>%
-    # Replace [var]
-    str_replace_all("\\[([a-z0-9_]+)\\]", "Dataset[['\\1']]") %>%
-    # Fix operators
-    str_replace_all("(?<![!<>=])=", "==") %>%
-    str_replace_all("!====", "!=") %>%
-    str_replace_all("'([0-9]+)'", "\\1") %>%
-    str_replace_all("\\band\\b", "&") %>%
-    str_replace_all("\\bor\\b", "|")
-
-  expr_r
-}
-
-# --- Initialize list to store applicability vectors ---
-applicability_list <- vector("list", length = nrow(dict))
-names(applicability_list) <- dict$Variable...Field.Name
-
-# --- Loop over all questions and evaluate branching logic ---
-for (i in seq_len(nrow(dict))) {
-  varname <- dict$Variable...Field.Name[i]
-  logic <- dict$branching_logic[i]
-  
-  if (is.na(logic) || logic == "") {
-    # No branching logic → all TRUE
-    applicability_list[[varname]] <- rep(TRUE, n)
-  } else {
-    # Convert to R logical expression string
-    expr_r <- convert_branching_logic(logic)
+# ============================================================================
+# STEP 2: CREATE PERSONALITY TOTAL SCORES
+# ============================================================================
+data_processed <- data_processed %>%
+  mutate(
+    # Extraversion: reserved (reversed) + outgoing
+    Extraversion = reserved_rev + outgoing,
     
-    if (is.null(expr_r)) {
-      applicability_list[[varname]] <- rep(TRUE, n)
-    } else {
-      # Evaluate expression safely with improved handling
-      applicable_vec <- tryCatch(
-        {
-          res <- eval(parse(text = expr_r))
-          # Convert to logical vector if not already logical
-          if (!is.logical(res)) {
-            res <- !is.na(res) & res != 0 & res != ""
-          }
-          # Ensure length matches n
-          if (length(res) != n) {
-            warning(sprintf("Branching logic for %s returned vector length %d != %d", varname, length(res), n))
-            res <- rep(FALSE, n)
-          }
-          res
-        },
-        error = function(e) {
-          warning(sprintf("Failed to evaluate branching logic for %s: %s", varname, e$message))
-          rep(FALSE, n)
-        }
-      )
-      
-      # Diagnostic output
-      cat(sprintf("Variable: %s, length: %d, class: %s\n", varname, length(applicable_vec), class(applicable_vec)))
-      
-      # Final check for logical vector of correct length
-      if (!is.logical(applicable_vec) || length(applicable_vec) != n) {
-        warning(sprintf("Branching logic for %s did not return logical vector of length %d", varname, n))
-        applicable_vec <- rep(FALSE, n)
-      }
-      
-      applicability_list[[varname]] <- applicable_vec
+    # Agreeableness: trusting + find_fault (reversed)
+    Agreeableness = trusting + find_fault_rev,
+    
+    # Conscientiousness: lazy (reversed) + thorough
+    Conscientiousness = lazy_rev + thorough,
+    
+    # Neuroticism: relaxed (reversed) + nervous
+    Neuroticism = relaxed_rev + nervous,
+    
+    # Openness: few_interests (reversed) + imagination
+    Openness = few_interests_rev + imagination
+  )
+
+```
+
+```{r}
+#| label: DBAS-16 Subscale
+
+# ============================================================================
+# STEP 3: CREATE DBAS TOTAL SCORES (0-10 scale)
+# ============================================================================
+data_processed <- data_processed %>%
+  mutate(
+    # Consequences: dbas_5, dbas_7, dbas_9, dbas_12, dbas_16
+    DBAS_Consequences = dbas_5 + dbas_7 + dbas_9 + dbas_12 + dbas_16,
+    
+    # Worry/Helplessness: dbas_3, dbas_4, dbas_8, dbas_10, dbas_11, dbas_14
+    DBAS_Worry_Helplessness = dbas_3 + dbas_4 + dbas_8 + dbas_10 + dbas_11 + dbas_14,
+    
+    # Expectations: dbas_1, dbas_2
+    DBAS_Expectations = dbas1 + dbas_2,
+    
+    # Medications: dbas_6, dbas_13, dbas_15
+    DBAS_Medications = dbas_6 + dbas_13 + dbas_15
+  )
+```
+
+```{r}
+#| label: SURPS Subscale
+
+# ============================================================================
+# STEP 4: CREATE SURPS TOTAL SCORES (1-4 scale)
+# ============================================================================
+# First, reverse code SURPS Hopelessness items (all except surps17)
+# Formula for 1-4 scale: reversed_score = 5 - original_score
+data_processed <- data_processed %>%
+  mutate(
+    surps1_rev = 5 - surps1,
+    surps4_rev = 5 - surps4,
+    surps7_rev = 5 - surps7,
+    surps13_rev = 5 - surps13,
+    surps20_rev = 5 - surps20,
+    surps23_rev = 5 - surps23
+    # Note: surps17 is NOT reversed
+  )
+
+# Create SURPS total scores
+data_processed <- data_processed %>%
+  mutate(
+    # Impulsivity: surps2, surps5, surps11, surps15, surps22
+    SURPS_Impulsivity = surps2 + surps5 + surps11 + surps15 + surps22,
+    
+    # Sensation Seeking: surps3, surps6, surps9, surps12, surps16, surps19
+    SURPS_Sensation_Seeking = surps3 + surps6 + surps9 + surps12 + surps16 + surps19,
+    
+    # Hopelessness: surps1(rev), surps4(rev), surps7(rev), surps13(rev), surps17, surps20(rev), surps23(rev)
+    SURPS_Hopelessness = surps1_rev + surps4_rev + surps7_rev + surps13_rev + surps17 + surps20_rev + surps23_rev,
+    
+    # Anxiety Sensitivity: surps8, surps10, surps14, surps18, surps21
+    SURPS_Anxiety_Sensitivity = surps8 + surps10 + surps14 + surps18 + surps21
+  )
+```
+
+```{r}
+#| label: CISS-21 Subscales
+
+# ============================================================================
+# STEP 5: CREATE CISS-21 TOTAL SCORES (1-5 scale)
+# ============================================================================
+data_processed <- data_processed %>%
+  mutate(
+    # Avoidance Style: ciss1, ciss4, ciss7, ciss9, ciss15, ciss18, ciss21
+    CISS_Avoidance_Style = ciss1 + ciss4 + ciss7 + ciss9 + ciss15 + ciss18 + ciss21,
+    
+    # Task Style: ciss2, ciss6, ciss8, ciss11, ciss13, ciss16, ciss19
+    CISS_Task_Style = ciss2 + ciss6 + ciss8 + ciss11 + ciss13 + ciss16 + ciss19,
+    
+    # Emotional Style: ciss3, ciss5, ciss10, ciss12, ciss14, ciss17, ciss20
+    CISS_Emotional_Style = ciss3 + ciss5 + ciss10 + ciss12 + ciss14 + ciss17 + ciss20
+  )
+```
+
+```{r}
+#| label: Final Dataset
+# ============================================================================
+# STEP 6: CREATE FINAL DATASET WITH TOTAL SCORES AND DEMOGRAPHIC VARIABLES
+# ============================================================================
+# Select all total scores plus additional variables and demographics for imputation (27 variables total)
+final_dataset <- data_processed %>%
+  select(
+    # DBAS scales (4 variables)
+    DBAS_Consequences,
+    DBAS_Worry_Helplessness,
+    DBAS_Expectations,
+    DBAS_Medications,
+    # Personality scales (5 variables)
+    Extraversion,
+    Agreeableness,
+    Conscientiousness,
+    Neuroticism,
+    Openness,
+    # SURPS scales (4 variables)
+    SURPS_Impulsivity,
+    SURPS_Sensation_Seeking,
+    SURPS_Hopelessness,
+    SURPS_Anxiety_Sensitivity,
+    # CISS scales (3 variables)
+    CISS_Avoidance_Style,
+    CISS_Task_Style,
+    CISS_Emotional_Style,
+    # Additional variables (2 variables)
+    osss_3_score,
+    phq2_score,
+    # Demographic variables (9 variables)
+    age,
+    sex,
+    gender,
+    prov_terr,
+    education,
+    employment,
+    driving_freq,
+    income
+  )
+```
+
+```{r}
+#| label: Checking Calculations
+# ============================================================================
+# STEP 7: VERIFICATION - CHECK YOUR CALCULATIONS
+# ============================================================================
+# Display summary statistics to verify calculations
+cat("=== VERIFICATION: Summary of Final Variables ===\n")
+summary(final_dataset)
+
+# Check for any missing values before MICE
+cat("\n=== Missing Values Count ===\n")
+sapply(final_dataset, function(x) sum(is.na(x)))
+
+# Check range of scores to ensure reverse coding worked
+cat("\n=== Score Ranges (to verify calculations) ===\n")
+cat("Big Five Personality (should be 2-10):\n")
+cat("  Extraversion range:", range(final_dataset$Extraversion, na.rm = TRUE), "\n")
+cat("  Agreeableness range:", range(final_dataset$Agreeableness, na.rm = TRUE), "\n")
+cat("  Conscientiousness range:", range(final_dataset$Conscientiousness, na.rm = TRUE), "\n")
+cat("  Neuroticism range:", range(final_dataset$Neuroticism, na.rm = TRUE), "\n")
+cat("  Openness range:", range(final_dataset$Openness, na.rm = TRUE), "\n")
+
+cat("\nSURPS scales:\n")
+cat("  Impulsivity range (5 items, 1-4 scale, should be 5-20):", range(final_dataset$SURPS_Impulsivity, na.rm = TRUE), "\n")
+cat("  Sensation Seeking range (6 items, 1-4 scale, should be 6-24):", range(final_dataset$SURPS_Sensation_Seeking, na.rm = TRUE), "\n")
+cat("  Hopelessness range (7 items, 1-4 scale, should be 7-28):", range(final_dataset$SURPS_Hopelessness, na.rm = TRUE), "\n")
+cat("  Anxiety Sensitivity range (5 items, 1-4 scale, should be 5-20):", range(final_dataset$SURPS_Anxiety_Sensitivity, na.rm = TRUE), "\n")
+
+cat("\nCISS scales:\n")
+cat("  Avoidance Style range (7 items, 1-5 scale, should be 7-35):", range(final_dataset$CISS_Avoidance_Style, na.rm = TRUE), "\n")
+cat("  Task Style range (7 items, 1-5 scale, should be 7-35):", range(final_dataset$CISS_Task_Style, na.rm = TRUE), "\n")
+cat("  Emotional Style range (7 items, 1-5 scale, should be 7-35):", range(final_dataset$CISS_Emotional_Style, na.rm = TRUE), "\n")
+```
+
+## Multiple Imputation
+```{r}
+#| label: Multiple Imputation
+# ============================================================================
+# STEP 8: APPLY MICE IMPUTATION
+# ============================================================================
+# Set seed for reproducibility
+set.seed(123)
+
+# Check data types and prepare for MICE
+# MICE will automatically detect categorical vs continuous variables
+# But let's ensure proper factor coding for categorical variables
+cat("=== PREPARING DATA FOR MICE IMPUTATION ===\n")
+cat("Checking data types...\n")
+
+# Convert categorical variables to factors if they aren't already
+categorical_vars <- c("sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income")
+
+for(var in categorical_vars) {
+  if(var %in% names(final_dataset)) {
+    if(!is.factor(final_dataset[[var]])) {
+      final_dataset[[var]] <- as.factor(final_dataset[[var]])
+      cat(paste("Converted", var, "to factor\n"))
     }
   }
 }
 
+# Display data types
+str(final_dataset)
 
-# Convert list to data.frame or matrix for easy indexing
-applicability_matrix <- do.call(cbind, applicability_list)
+# Apply MICE imputation
+cat("\n=== RUNNING MICE IMPUTATION ===\n")
+cat("This may take a moment with 27 variables...\n")
 
-# Fix colnames for clarity
-colnames(applicability_matrix) <- names(applicability_list)
+mice_result <- mice(final_dataset, m = 5, method = 'pmm', printFlag = FALSE)
 
-## Description of the applicability matrix
-# applicability_matrix[i, j] = TRUE/FALSE if participant i should see question j
+# Get the completed dataset (using the first imputation)
+final_dataset_imputed <- complete(mice_result, 1)
 
-##### TESTING TO SEE IF THE CODE WORKED #####
-#participants_zero <- which(Dataset$scrn_stopped_bzra == "0")
-## Subset responses for confirm_stop_attempt among these participants
-#responses_confirm <- Dataset$confirm_stop_attempt[participants_zero]
+# Display summary of imputed dataset
+cat("\n=== FINAL IMPUTED DATASET SUMMARY ===\n")
+summary(final_dataset_imputed)
 
-## Check how many responded (not NA)
-#num_answered <- sum(!is.na(responses_confirm))
-#num_missing <- sum(is.na(responses_confirm))
+# Check that there are no missing values after imputation
+cat("\n=== Missing Values After MICE ===\n")
+sapply(final_dataset_imputed, function(x) sum(is.na(x)))
 
-#cat("Number of participants with scrn_stopped_bzra == '0':", length(participants_zero), "\n")
-#cat("Among them, how many answered confirm_stop_attempt:", num_answered, "\n")
-#cat("And how many did NOT answer (missing):", num_missing, "\n")
+cat("\n=== PROCESS COMPLETE ===\n")
+cat("Your final dataset 'final_dataset_imputed' contains 27 variables and is ready for analysis.\n")
+cat("Variables included:\n")
+cat("  - 4 DBAS scales\n")
+cat("  - 5 Big Five personality dimensions\n")
+cat("  - 4 SURPS scales\n")
+cat("  - 3 CISS coping styles\n")
+cat("  - 2 additional variables (osss_3_score, phq2_score)\n")
+cat("  - 9 demographic variables (age, sex, gender, prov_terr, education, employment, driving_freq, income)\n")
+cat("\nIMPORTANT NOTES:\n")
+cat("1. You now have 27 variables total, which is well above the 10-15 recommendation.\n")
+cat("2. For your random forest model, you'll need to select the most important variables.\n")
+cat("3. Consider creating separate models or using variable selection techniques.\n")
+cat("4. The demographic variables will improve imputation quality but may not all be needed in your final model.\n")
 
-##### EXTRA CODE THAT MAY BE USEFUL #####
-## Example: Check how many participants should see each question
-#applicability_counts <- colSums(applicability_matrix)
+# Optional: Create a subset with just the main scales for modeling
+cat("\n=== CREATING SUBSET FOR MODELING ===\n")
+modeling_dataset <- final_dataset_imputed %>%
+  select(
+    # Main scales only (16 variables)
+    DBAS_Consequences, DBAS_Worry_Helplessness, DBAS_Expectations, DBAS_Medications,
+    Extraversion, Agreeableness, Conscientiousness, Neuroticism, Openness,
+    SURPS_Impulsivity, SURPS_Sensation_Seeking, SURPS_Hopelessness, SURPS_Anxiety_Sensitivity,
+    CISS_Avoidance_Style, CISS_Task_Style, CISS_Emotional_Style
+  )
 
-## Example: Filter questions that apply to at least some participants
-#questions_shown <- names(applicability_counts)[applicability_counts > 0]
-```
-
-## Missingness
-Now that the branching logic has been successfully followed, I can carry on and check missingness and determine if my data is MCAR, MAR, or MNAR which will impact if Multiple Implication is a valuable tool or not. On top of this, if my missingness value is below 5%, it is generally accepted that MI is not needed.
-
-```{r}
-#| label: Missingness
-# Initialize data frame to store results
-missingness_df <- data.frame(
-  question = colnames(applicability_matrix),
-  n_missing = integer(length(colnames(applicability_matrix))),
-  percent_missing = numeric(length(colnames(applicability_matrix))),
-  n_applicable = integer(length(colnames(applicability_matrix))),
-  stringsAsFactors = FALSE
-)
-
-# Loop over each question
-for (question in colnames(applicability_matrix)) {
-  applicable <- applicability_matrix[, question]           # TRUE/FALSE per respondent
-  responses <- Dataset[[question]]                         # Actual values in dataset
-  
-  n_app <- sum(applicable, na.rm = TRUE)
-  
-  if (!is.null(applicable) && n_app > 0) {
-    responses_applicable <- responses[applicable]
-    
-    if (length(responses_applicable) > 0) {
-      is_missing <- is.na(responses_applicable)
-      n_miss <- sum(is_missing)
-      pct_miss <- if (n_app > 0) (n_miss / n_app) * 100 else 0
-      
-      missingness_df$n_missing[missingness_df$question == question] <- n_miss
-      missingness_df$n_applicable[missingness_df$question == question] <- n_app
-      missingness_df$percent_missing[missingness_df$question == question] <- pct_miss
-    } else {
-      # No responses for applicable rows
-      missingness_df$n_missing[missingness_df$question == question] <- 0
-      missingness_df$n_applicable[missingness_df$question == question] <- 0
-      missingness_df$percent_missing[missingness_df$question == question] <- 0
-    }
-  } else {
-    # Question never applied to anyone
-    missingness_df$n_missing[missingness_df$question == question] <- 0
-    missingness_df$n_applicable[missingness_df$question == question] <- 0
-    missingness_df$percent_missing[missingness_df$question == question] <- 0
-  }
-}
-
-# Sort by percentage missing in descending order
-missingness_df <- missingness_df[order(-missingness_df$percent_missing), ]
-
-print(missingness_df)
-
-################################################################################
-################################################################################
-
-#| label: MCAR Analysis
-# Here is the code I will use to examine if my data is MCAR, MAR, or MNAR to help me determine if MI is useful.
-
-
-
-```
-
-
-
-## Multiple Imputation 
-```{r}
-#| label: 
-
-
+cat("Created 'modeling_dataset' with 16 main psychological scales (no demographics).\n")
+cat("This may be more appropriate for your random forest model.\n")
 ```
 
 
