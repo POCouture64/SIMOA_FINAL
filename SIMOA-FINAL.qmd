@@ -79,7 +79,7 @@ Dataset <- SIMOA_Report %>%
 ## Data Cleaning
 Below is the section where I will separate the questions into the categories the participants truly saw to avoid higher values for missingness which would be incorrect.
 ```{r}
-#| label: Data Cleaning
+#| label: Making Sata Questions Into Factors
 
 # I will begin changing all the 'Select all that apply" questions to factors with 1 indicating an answer was provided and 0 meaning that none of the options were selected by the participant (likely not shown the questions)
 # Define all variable prefixes
@@ -108,7 +108,7 @@ attr(Dataset, "spec") <- NULL
 
 ################################################################################
 ################################################################################
-
+#| label: Removing Columns With Only N/A
 # This next section will remove the columns with only N/A values showing that they were not answered by anyone regardless of group and are not needed for our analysis.
 # Identify columns with all NA
 cols_all_na <- names(Dataset)[colSums(!is.na(Dataset)) == 0]
@@ -119,7 +119,7 @@ Dataset <- Dataset[, colSums(!is.na(Dataset)) > 0]
 
 ################################################################################
 ################################################################################
-
+#| label: Branching Logic Seperation for the Questions Based on Frequency of Use
 # This section will group the questions into which ones were seen by those who answered "2" or using their BZRA more than 1 time per month to the "freq_dich" question.
 # === Load REDCap data dictionary ===
 dict <- read.csv("Data_Dict.csv", stringsAsFactors = FALSE)
@@ -161,33 +161,52 @@ cat("Number of common_questions:", length(common_questions), "\n")
 
 ################################################################################
 ################################################################################
-
-# I need to futher the branching logic because men and women were shown seperate questions so below is how I have gone about ensuring that missingness is only calculated for the questions participants could have been shown
-
-# Function to convert REDCap branching logic to R expression string
-convert_branching_logic <- function(expr) {
-  if (is.na(expr) || expr == "") return(NULL) # no branching logic means always shown
-  
-  expr_r <- expr %>%
-    tolower() %>%                                    # lowercase for consistency
-    str_replace_all("\\[([^\\]]+)\\]", "Dataset[['\\1']]") %>% # replace [var]
-    str_replace_all("=", "==") %>%                   # replace = with ==
-    str_replace_all("!====", "!=") %>%               # fix != if broken by replacement
-    str_replace_all("'([0-9]+)'", "\\1") %>%         # remove quotes around numbers
-    str_replace_all("\\band\\b", "&") %>%            # replace logical AND
-    str_replace_all("\\bor\\b", "|")                  # replace logical OR
-  
-  expr_r
-}
+#| label: Branching Logic For All Other Questions
+# I need to further the branching logic because men and women were shown separate questions so below is how I have gone about ensuring that missingness is only calculated for the questions participants could have been shown
 
 # Number of participants
 n <- nrow(Dataset)
 
-# Initialize list to store applicability vectors
+# --- Create logical indicator for other_sub_use upfront ---
+
+# Checkbox columns for other_sub
+checkbox_cols <- paste0("other_sub___", 0:8)
+checkbox_cols <- checkbox_cols[checkbox_cols %in% colnames(Dataset)]  # ensure columns exist
+
+# Logical vector if "Other" checkbox (___8) is selected
+Dataset$other_sub_use <- FALSE
+if ("other_sub___8" %in% colnames(Dataset)) {
+  Dataset$other_sub_use <- Dataset[["other_sub___8"]] == 1
+  Dataset$other_sub_use[is.na(Dataset$other_sub_use)] <- FALSE
+}
+
+# --- Function to convert REDCap branching logic to R expression string ---
+convert_branching_logic <- function(expr) {
+  if (is.na(expr) || expr == "") return(NULL)
+
+  expr_r <- expr %>%
+    tolower() %>%
+    # Explicitly replace [other_sub_use] first
+    str_replace_all("\\[other_sub_use\\]", "Dataset[['other_sub_use']]") %>%
+    # Replace [var(num)] with triple underscores
+    str_replace_all("\\[([a-z0-9_]+)\\((\\d+)\\)\\]", "Dataset[['\\1___\\2']]") %>%
+    # Replace [var]
+    str_replace_all("\\[([a-z0-9_]+)\\]", "Dataset[['\\1']]") %>%
+    # Fix operators
+    str_replace_all("(?<![!<>=])=", "==") %>%
+    str_replace_all("!====", "!=") %>%
+    str_replace_all("'([0-9]+)'", "\\1") %>%
+    str_replace_all("\\band\\b", "&") %>%
+    str_replace_all("\\bor\\b", "|")
+
+  expr_r
+}
+
+# --- Initialize list to store applicability vectors ---
 applicability_list <- vector("list", length = nrow(dict))
 names(applicability_list) <- dict$Variable...Field.Name
 
-# Loop over all questions
+# --- Loop over all questions and evaluate branching logic ---
 for (i in seq_len(nrow(dict))) {
   varname <- dict$Variable...Field.Name[i]
   logic <- dict$branching_logic[i]
@@ -202,17 +221,31 @@ for (i in seq_len(nrow(dict))) {
     if (is.null(expr_r)) {
       applicability_list[[varname]] <- rep(TRUE, n)
     } else {
-      # Evaluate expression safely
-      # Wrap in tryCatch to handle any parse/eval errors
+      # Evaluate expression safely with improved handling
       applicable_vec <- tryCatch(
-        eval(parse(text = expr_r)),
+        {
+          res <- eval(parse(text = expr_r))
+          # Convert to logical vector if not already logical
+          if (!is.logical(res)) {
+            res <- !is.na(res) & res != 0 & res != ""
+          }
+          # Ensure length matches n
+          if (length(res) != n) {
+            warning(sprintf("Branching logic for %s returned vector length %d != %d", varname, length(res), n))
+            res <- rep(FALSE, n)
+          }
+          res
+        },
         error = function(e) {
           warning(sprintf("Failed to evaluate branching logic for %s: %s", varname, e$message))
-          rep(FALSE, n)  # If error, assume not applicable
+          rep(FALSE, n)
         }
       )
       
-      # If evaluation result is not logical vector, fallback to all FALSE
+      # Diagnostic output
+      cat(sprintf("Variable: %s, length: %d, class: %s\n", varname, length(applicable_vec), class(applicable_vec)))
+      
+      # Final check for logical vector of correct length
       if (!is.logical(applicable_vec) || length(applicable_vec) != n) {
         warning(sprintf("Branching logic for %s did not return logical vector of length %d", varname, n))
         applicable_vec <- rep(FALSE, n)
@@ -222,6 +255,7 @@ for (i in seq_len(nrow(dict))) {
     }
   }
 }
+
 
 # Convert list to data.frame or matrix for easy indexing
 applicability_matrix <- do.call(cbind, applicability_list)
@@ -252,6 +286,68 @@ colnames(applicability_matrix) <- names(applicability_list)
 ## Example: Filter questions that apply to at least some participants
 #questions_shown <- names(applicability_counts)[applicability_counts > 0]
 ```
+
+## Missingness
+Now that the branching logic has been successfully followed, I can carry on and check missingness and determine if my data is MCAR, MAR, or MNAR which will impact if Multiple Implication is a valuable tool or not. On top of this, if my missingness value is below 5%, it is generally accepted that MI is not needed.
+
+```{r}
+#| label: Missingness
+# Initialize data frame to store results
+missingness_df <- data.frame(
+  question = colnames(applicability_matrix),
+  n_missing = integer(length(colnames(applicability_matrix))),
+  percent_missing = numeric(length(colnames(applicability_matrix))),
+  n_applicable = integer(length(colnames(applicability_matrix))),
+  stringsAsFactors = FALSE
+)
+
+# Loop over each question
+for (question in colnames(applicability_matrix)) {
+  applicable <- applicability_matrix[, question]           # TRUE/FALSE per respondent
+  responses <- Dataset[[question]]                         # Actual values in dataset
+  
+  n_app <- sum(applicable, na.rm = TRUE)
+  
+  if (!is.null(applicable) && n_app > 0) {
+    responses_applicable <- responses[applicable]
+    
+    if (length(responses_applicable) > 0) {
+      is_missing <- is.na(responses_applicable)
+      n_miss <- sum(is_missing)
+      pct_miss <- if (n_app > 0) (n_miss / n_app) * 100 else 0
+      
+      missingness_df$n_missing[missingness_df$question == question] <- n_miss
+      missingness_df$n_applicable[missingness_df$question == question] <- n_app
+      missingness_df$percent_missing[missingness_df$question == question] <- pct_miss
+    } else {
+      # No responses for applicable rows
+      missingness_df$n_missing[missingness_df$question == question] <- 0
+      missingness_df$n_applicable[missingness_df$question == question] <- 0
+      missingness_df$percent_missing[missingness_df$question == question] <- 0
+    }
+  } else {
+    # Question never applied to anyone
+    missingness_df$n_missing[missingness_df$question == question] <- 0
+    missingness_df$n_applicable[missingness_df$question == question] <- 0
+    missingness_df$percent_missing[missingness_df$question == question] <- 0
+  }
+}
+
+# Sort by percentage missing in descending order
+missingness_df <- missingness_df[order(-missingness_df$percent_missing), ]
+
+print(missingness_df)
+
+################################################################################
+################################################################################
+
+#| label: MCAR Analysis
+# Here is the code I will use to examine if my data is MCAR, MAR, or MNAR to help me determine if MI is useful.
+
+
+
+```
+
 
 
 ## Multiple Imputation 
