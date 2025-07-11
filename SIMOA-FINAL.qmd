@@ -578,6 +578,215 @@ if(nrow(categorical_effects) > 0) {
 
 ```
 
+```{r}
+#| label: Categorical Tables
+
+# Load required libraries
+library(dplyr)
+library(kableExtra)
+library(flextable)
+library(officer)  # for fp_border function
+
+# Initialize results dataframe (place this before your loop)
+results <- data.frame(
+  Variable = character(),
+  Type = character(),
+  Effect_Size = numeric(),
+  Effect_Magnitude = character(),
+  OR_or_Mean_Diff = numeric(),
+  CI_Lower = numeric(),
+  CI_Upper = numeric(),
+  P_Value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# After your loop, create the APA table
+create_apa_odds_table <- function(results_df) {
+  # Clean and format the results
+  table_data <- results_df %>%
+    mutate(
+      # Format OR with 2 decimal places
+      OR_formatted = sprintf("%.2f", OR_or_Mean_Diff),
+      
+      # Format confidence intervals
+      CI_formatted = sprintf("%.2f, %.2f", CI_Lower, CI_Upper),
+      
+      # Format p-values according to APA style
+      P_formatted = case_when(
+        P_Value < 0.001 ~ "< .001",
+        P_Value < 0.01 ~ sprintf("= %.3f", P_Value),
+        P_Value < 0.05 ~ sprintf("= %.3f", P_Value),
+        P_Value >= 0.05 ~ sprintf("= %.3f", P_Value)
+      ),
+      
+      # Clean variable names (remove underscores, capitalize)
+      Variable_clean = gsub("_", " ", Variable),
+      Variable_clean = tools::toTitleCase(Variable_clean)
+    ) %>%
+    select(Variable_clean, OR_formatted, CI_formatted, P_formatted)
+  
+  # Create the table using kableExtra
+  apa_table <- table_data %>%
+    kbl(
+      col.names = c("Variable", "Odds Ratio", "95% CI", "p"),
+      align = c("l", "c", "c", "c"),
+      caption = "Table 1. Odds Ratios for Categorical Variables Associated with BZRA Discontinuation"
+    ) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed"),
+      full_width = FALSE,
+      position = "center",
+      font_size = 12
+    ) %>%
+    add_header_above(c(" " = 1, "Statistics" = 3))
+  
+  return(apa_table)
+}
+
+# Alternative function using flextable (better for Word documents)
+create_apa_odds_flextable <- function(results_df) {
+  # Clean and format the results
+  table_data <- results_df %>%
+    mutate(
+      # Format OR with 2 decimal places
+      OR_formatted = sprintf("%.2f", OR_or_Mean_Diff),
+      
+      # Format confidence intervals
+      CI_formatted = sprintf("[%.2f, %.2f]", CI_Lower, CI_Upper),
+      
+      # Format p-values according to APA style
+      P_formatted = case_when(
+        P_Value < 0.001 ~ "< .001",
+        P_Value < 0.01 ~ sprintf("%.3f", P_Value),
+        P_Value < 0.05 ~ sprintf("%.3f", P_Value),
+        P_Value >= 0.05 ~ sprintf("%.3f", P_Value)
+      ),
+      
+      # Clean variable names
+      Variable_clean = gsub("_", " ", Variable),
+      Variable_clean = tools::toTitleCase(Variable_clean)
+    ) %>%
+    select(Variable_clean, OR_formatted, CI_formatted, P_formatted)
+  
+  # Create flextable
+  ft <- flextable(table_data) %>%
+    set_header_labels(
+      Variable_clean = "Variable",
+      OR_formatted = "Odds Ratio",
+      CI_formatted = "95% CI",
+      P_formatted = "p"
+    ) %>%
+    add_header_row(
+      values = c("", "Statistics"),
+      colwidths = c(1, 3)
+    ) %>%
+    align(align = "center", part = "header") %>%
+    align(j = 1, align = "left", part = "body") %>%
+    align(j = 2:4, align = "center", part = "body") %>%
+    font(fontname = "Times New Roman", part = "all") %>%
+    fontsize(size = 12, part = "all") %>%
+    bold(part = "header") %>%
+    border_remove() %>%
+    hline_top(border = fp_border(width = 2), part = "header") %>%
+    hline_bottom(border = fp_border(width = 2), part = "header") %>%
+    hline_bottom(border = fp_border(width = 2), part = "body") %>%
+    autofit() %>%
+    add_footer_lines("Note. BZRA = Benzodiazepine receptor agonist; CI = confidence interval. Odds ratios > 1 indicate higher odds of discontinuation.")
+  
+  return(ft)
+}
+
+# Usage examples:
+
+# 1. Create and display the table using kableExtra
+apa_table_kable <- create_apa_odds_table(results)
+apa_table_kable  # Display the table (don't use print())
+
+# 2. Create flextable version (better for Word output)
+apa_table_flex <- create_apa_odds_flextable(results)
+apa_table_flex  # Display the flextable
+
+# 3. Save to Word document
+library(officer)
+doc <- read_docx() %>%
+  body_add_flextable(apa_table_flex)
+print(doc, target = "Categorical Variable Table.docx")
+
+# 4. Save as HTML
+save_kable(apa_table_kable, "Categorical Variable Table.html")
+
+# 5. For LaTeX/PDF output
+library(knitr)
+
+# First create the formatted data
+table_data <- results %>%
+  mutate(
+    OR_formatted = sprintf("%.2f", OR_or_Mean_Diff),
+    CI_formatted = sprintf("%.2f, %.2f", CI_Lower, CI_Upper),
+    P_formatted = case_when(
+      P_Value < 0.001 ~ "< .001",
+      P_Value < 0.01 ~ sprintf("%.3f", P_Value),
+      P_Value < 0.05 ~ sprintf("%.3f", P_Value),
+      P_Value >= 0.05 ~ sprintf("%.3f", P_Value)
+    ),
+    Variable_clean = gsub("_", " ", Variable),
+    Variable_clean = tools::toTitleCase(Variable_clean)
+  ) %>%
+  select(Variable_clean, OR_formatted, CI_formatted, P_formatted)
+
+# Then create the LaTeX table
+kable(table_data, format = "latex", booktabs = TRUE, 
+      col.names = c("Variable", "Odds Ratio", "95% CI", "p"),
+      caption = "Odds Ratios for Categorical Variables Associated with BZRA Discontinuation")
+
+# Additional formatting function for complex tables
+format_complex_apa_table <- function(results_df) {
+  # Group by variable type if needed
+  table_data <- results_df %>%
+    arrange(Variable) %>%
+    mutate(
+      OR_CI = sprintf("%.2f [%.2f, %.2f]", OR_or_Mean_Diff, CI_Lower, CI_Upper),
+      P_formatted = case_when(
+        P_Value < 0.001 ~ "< .001",
+        TRUE ~ sprintf("%.3f", P_Value)
+      ),
+      Variable_clean = gsub("_", " ", Variable),
+      Variable_clean = tools::toTitleCase(Variable_clean),
+      # Add effect size interpretation
+      Effect_Size_Note = case_when(
+        Effect_Magnitude == "Large" ~ "**",
+        Effect_Magnitude == "Medium" ~ "*",
+        TRUE ~ ""
+      )
+    ) %>%
+    select(Variable_clean, OR_CI, P_formatted, Effect_Size_Note)
+  
+  # Create table with effect size indicators
+  ft <- flextable(table_data) %>%
+    set_header_labels(
+      Variable_clean = "Variable",
+      OR_CI = "OR [95% CI]",
+      P_formatted = "p",
+      Effect_Size_Note = ""
+    ) %>%
+    font(fontname = "Times New Roman", part = "all") %>%
+    fontsize(size = 12, part = "all") %>%
+    align(j = 1, align = "left", part = "body") %>%
+    align(j = 2:4, align = "center", part = "body") %>%
+    bold(part = "header") %>%
+    border_remove() %>%
+    hline_top(border = fp_border(width = 2), part = "header") %>%
+    hline_bottom(border = fp_border(width = 2), part = "header") %>%
+    hline_bottom(border = fp_border(width = 2), part = "body") %>%
+    autofit() %>%
+    add_footer_lines(c(
+      "Note. BZRA = Benzodiazepine receptor agonist; CI = confidence interval; OR = odds ratio.",
+      "* Medium effect size, ** Large effect size."
+    ))
+  
+  return(ft)
+}
+```
 
 
 
