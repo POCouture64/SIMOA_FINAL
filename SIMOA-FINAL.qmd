@@ -42,6 +42,7 @@ In this section I am loading all the necessary packages for my analysis and load
 
 # Installing and Loading Packages
 install.packages("MissMech")
+install.packages("randomForest")
 
 library(dplyr)
 library(effsize)
@@ -49,6 +50,7 @@ library(ggplot2)
 library(mice)
 library(MissMech)
 library(naniar)
+library(randomForest)
 library(readr)
 library(stringr)
 library(tidyverse)
@@ -578,215 +580,184 @@ if(nrow(categorical_effects) > 0) {
 
 ```
 
+## Random Forest Model
+In this section I will run the code for my RFM. I will run it once on my imputed data with 27 variables and once with my imputed data with only 18 variables. After that I will run it on my full dataset to see if any of the variables I have not imputed are meaningfully adding to my results.
+
 ```{r}
-#| label: Categorical Tables
+#| label: Random Forest (27 variables)
 
-# Load required libraries
-library(dplyr)
-library(kableExtra)
-library(flextable)
-library(officer)  # for fp_border function
+# =============================
+# --- Load and Install Packages ---
+# =============================
+#install.packages("flexplot")
+#install.packages("tidyverse")
+#install.packages("VSURF")
+#install.packages("ROSE")
+#install.packages("ranger")
+#install.packages("ResourceSelection")
+#install.packages("car")
 
-# Initialize results dataframe (place this before your loop)
-results <- data.frame(
-  Variable = character(),
-  Type = character(),
-  Effect_Size = numeric(),
-  Effect_Magnitude = character(),
-  OR_or_Mean_Diff = numeric(),
-  CI_Lower = numeric(),
-  CI_Upper = numeric(),
-  P_Value = numeric(),
-  stringsAsFactors = FALSE
-)
+library(flexplot)
+library(tidyverse)
+library(VSURF)
+library(party)
+library(effects)
+library(ggplot2)
+library(pROC)
+library(ROSE)
+library(ranger)
+library(ResourceSelection)
+library(car)
 
-# After your loop, create the APA table
-create_apa_odds_table <- function(results_df) {
-  # Clean and format the results
-  table_data <- results_df %>%
-    mutate(
-      # Format OR with 2 decimal places
-      OR_formatted = sprintf("%.2f", OR_or_Mean_Diff),
-      
-      # Format confidence intervals
-      CI_formatted = sprintf("%.2f, %.2f", CI_Lower, CI_Upper),
-      
-      # Format p-values according to APA style
-      P_formatted = case_when(
-        P_Value < 0.001 ~ "< .001",
-        P_Value < 0.01 ~ sprintf("= %.3f", P_Value),
-        P_Value < 0.05 ~ sprintf("= %.3f", P_Value),
-        P_Value >= 0.05 ~ sprintf("= %.3f", P_Value)
-      ),
-      
-      # Clean variable names (remove underscores, capitalize)
-      Variable_clean = gsub("_", " ", Variable),
-      Variable_clean = tools::toTitleCase(Variable_clean)
-    ) %>%
-    select(Variable_clean, OR_formatted, CI_formatted, P_formatted)
-  
-  # Create the table using kableExtra
-  apa_table <- table_data %>%
-    kbl(
-      col.names = c("Variable", "Odds Ratio", "95% CI", "p"),
-      align = c("l", "c", "c", "c"),
-      caption = "Table 1. Odds Ratios for Categorical Variables Associated with BZRA Discontinuation"
-    ) %>%
-    kable_styling(
-      bootstrap_options = c("striped", "hover", "condensed"),
-      full_width = FALSE,
-      position = "center",
-      font_size = 12
-    ) %>%
-    add_header_above(c(" " = 1, "Statistics" = 3))
-  
-  return(apa_table)
+# =============================
+# --- Create folder for plots ---
+# =============================
+plot_dir <- "VSURF_model_plots"
+if (!dir.exists(plot_dir)) {
+  dir.create(plot_dir)
 }
 
-# Alternative function using flextable (better for Word documents)
-create_apa_odds_flextable <- function(results_df) {
-  # Clean and format the results
-  table_data <- results_df %>%
-    mutate(
-      # Format OR with 2 decimal places
-      OR_formatted = sprintf("%.2f", OR_or_Mean_Diff),
-      
-      # Format confidence intervals
-      CI_formatted = sprintf("[%.2f, %.2f]", CI_Lower, CI_Upper),
-      
-      # Format p-values according to APA style
-      P_formatted = case_when(
-        P_Value < 0.001 ~ "< .001",
-        P_Value < 0.01 ~ sprintf("%.3f", P_Value),
-        P_Value < 0.05 ~ sprintf("%.3f", P_Value),
-        P_Value >= 0.05 ~ sprintf("%.3f", P_Value)
-      ),
-      
-      # Clean variable names
-      Variable_clean = gsub("_", " ", Variable),
-      Variable_clean = tools::toTitleCase(Variable_clean)
-    ) %>%
-    select(Variable_clean, OR_formatted, CI_formatted, P_formatted)
-  
-  # Create flextable
-  ft <- flextable(table_data) %>%
-    set_header_labels(
-      Variable_clean = "Variable",
-      OR_formatted = "Odds Ratio",
-      CI_formatted = "95% CI",
-      P_formatted = "p"
-    ) %>%
-    add_header_row(
-      values = c("", "Statistics"),
-      colwidths = c(1, 3)
-    ) %>%
-    align(align = "center", part = "header") %>%
-    align(j = 1, align = "left", part = "body") %>%
-    align(j = 2:4, align = "center", part = "body") %>%
-    font(fontname = "Times New Roman", part = "all") %>%
-    fontsize(size = 12, part = "all") %>%
-    bold(part = "header") %>%
-    border_remove() %>%
-    hline_top(border = fp_border(width = 2), part = "header") %>%
-    hline_bottom(border = fp_border(width = 2), part = "header") %>%
-    hline_bottom(border = fp_border(width = 2), part = "body") %>%
-    autofit() %>%
-    add_footer_lines("Note. BZRA = Benzodiazepine receptor agonist; CI = confidence interval. Odds ratios > 1 indicate higher odds of discontinuation.")
-  
-  return(ft)
+# =============================
+# --- Data Preparation ---
+# =============================
+colnames(final_dataset_imputed)
+
+vs_analysis_dataset <- final_dataset_imputed %>%
+  mutate(scrn_stopped_bzra = as.factor(Dataset$scrn_stopped_bzra)) %>%
+  filter(!is.na(scrn_stopped_bzra))
+
+# =============================
+# --- Variable Selection with VSURF ---
+# =============================
+vs_mod <- VSURF(scrn_stopped_bzra ~ ., data = vs_analysis_dataset)
+pred_vars <- names(vs_analysis_dataset)[vs_mod$varselect.pred]
+print(pred_vars)
+
+# --- Save VSURF base plots ---
+png(filename = file.path(plot_dir, "vsurf_threshold_plot.png"), width = 800, height = 600)
+plot(vs_mod, step = "thres", imp.mean = FALSE)
+dev.off()
+
+png(filename = file.path(plot_dir, "vsurf_Interpretation_plot.png"), width = 800, height = 600)
+plot(vs_mod, step = "interp", imp.mean = FALSE)
+dev.off()
+
+png(filename = file.path(plot_dir, "vsurf_Predictive_plot.png"), width = 800, height = 600)
+plot(vs_mod, step = "pred", imp.mean = FALSE)
+dev.off()
+
+# =============================
+# --- Class Imbalance Handling (ROSE) ---
+# =============================
+set.seed(123)
+balanced_data <- ovun.sample(scrn_stopped_bzra ~ DBAS_Medications + SURPS_Anxiety_Sensitivity + CISS_Avoidance_Style,
+                             data = vs_analysis_dataset,
+                             method = "both", N = nrow(vs_analysis_dataset))$data
+
+# =============================
+# --- Logistic Regression (Full Model) ---
+# =============================
+mod_Full <- glm(scrn_stopped_bzra ~ DBAS_Medications + SURPS_Anxiety_Sensitivity + CISS_Avoidance_Style,
+                data = balanced_data,
+                family = binomial)
+
+summary(mod_Full)
+exp(coef(mod_Full))
+exp(confint(mod_Full))
+
+# =============================
+# --- Model Comparison (Reduced vs Full) ---
+# =============================
+mod_Red <- glm(scrn_stopped_bzra ~ DBAS_Medications + SURPS_Anxiety_Sensitivity,
+               data = balanced_data,
+               family = binomial)
+
+anova(mod_Red, mod_Full, test = "Chisq")
+print(AIC(mod_Red, mod_Full))
+print(BIC(mod_Red, mod_Full))
+
+# =============================
+# --- Model Diagnostics Using Reduced Model ---
+# =============================
+
+# --- VIF Check ---
+vif(mod_Red)
+
+# --- Predict probabilities ---
+pred_probs <- predict(mod_Red, type = "response")
+
+# --- Hosmer-Lemeshow Test --- (MODEL FIT IS ACCEPTABLE)
+hoslem.test(as.numeric(as.character(balanced_data$scrn_stopped_bzra)), pred_probs)
+
+# --- ROC Curve ---
+roc_obj <- roc(balanced_data$scrn_stopped_bzra, pred_probs)
+
+p_roc <- ggroc(roc_obj) + 
+  ggtitle(paste("ROC Curve (AUC =", round(auc(roc_obj), 3), ")")) +
+  theme_minimal()
+
+ggsave(filename = file.path(plot_dir, "roc_curve.png"), plot = p_roc, width = 6, height = 4)
+
+# --- Density plot of predicted probabilities ---
+balanced_data$pred_prob <- pred_probs
+
+p_density <- ggplot(balanced_data, aes(x = pred_prob, color = scrn_stopped_bzra)) +
+  geom_density() +
+  labs(title = "Density of Predicted Probabilities by Outcome",
+       x = "Predicted Probability", color = "Outcome") +
+  theme_minimal()
+
+ggsave(filename = file.path(plot_dir, "density_pred_prob.png"), plot = p_density, width = 6, height = 4)
+
+# =============================
+# --- Partial Residual Diagnostics Using Reduced Model ---
+# =============================
+balanced_data$partial_resid_DBAS <- residuals(mod_Red, type = "response") +
+  coef(mod_Red)["DBAS_Medications"] * balanced_data$DBAS_Medications
+
+balanced_data$partial_resid_SURPS <- residuals(mod_Red, type = "response") +
+  coef(mod_Red)["SURPS_Anxiety_Sensitivity"] * balanced_data$SURPS_Anxiety_Sensitivity
+
+p1 <- ggplot(balanced_data, aes(x = DBAS_Medications, y = partial_resid_DBAS)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  labs(title = "Partial Residuals: DBAS_Medications") +
+  theme_minimal()
+
+ggsave(filename = file.path(plot_dir, "partial_resid_DBAS.png"), plot = p1, width = 6, height = 4)
+
+p2 <- ggplot(balanced_data, aes(x = SURPS_Anxiety_Sensitivity, y = partial_resid_SURPS)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  labs(title = "Partial Residuals: SURPS_Anxiety_Sensitivity") +
+  theme_minimal()
+
+ggsave(filename = file.path(plot_dir, "partial_resid_SURPS.png"), plot = p2, width = 6, height = 4)
+
+# =============================
+# --- Plot Model Effects with ggplot Using Reduced Model ---
+# =============================
+plot_effect_gg <- function(effect_obj, predictor_name) {
+  df <- as.data.frame(effect_obj[[predictor_name]])
+  ggplot(df, aes_string(x = predictor_name, y = "fit")) +
+    geom_line(color = "blue", size = 1) +
+    geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "lightblue") +
+    labs(title = paste("Effect of", predictor_name),
+         y = "Predicted Probability") +
+    theme_minimal()
 }
 
-# Usage examples:
+eff_all <- allEffects(mod_Red)
 
-# 1. Create and display the table using kableExtra
-apa_table_kable <- create_apa_odds_table(results)
-apa_table_kable  # Display the table (don't use print())
+p_DBAS <- plot_effect_gg(eff_all, "DBAS_Medications")
+p_SURPS <- plot_effect_gg(eff_all, "SURPS_Anxiety_Sensitivity")
 
-# 2. Create flextable version (better for Word output)
-apa_table_flex <- create_apa_odds_flextable(results)
-apa_table_flex  # Display the flextable
+ggsave(filename = file.path(plot_dir, "effect_DBAS.png"), plot = p_DBAS, width = 6, height = 4)
+ggsave(filename = file.path(plot_dir, "effect_SURPS.png"), plot = p_SURPS, width = 6, height = 4)
 
-# 3. Save to Word document
-library(officer)
-doc <- read_docx() %>%
-  body_add_flextable(apa_table_flex)
-print(doc, target = "Categorical Variable Table.docx")
 
-# 4. Save as HTML
-save_kable(apa_table_kable, "Categorical Variable Table.html")
-
-# 5. For LaTeX/PDF output
-library(knitr)
-
-# First create the formatted data
-table_data <- results %>%
-  mutate(
-    OR_formatted = sprintf("%.2f", OR_or_Mean_Diff),
-    CI_formatted = sprintf("%.2f, %.2f", CI_Lower, CI_Upper),
-    P_formatted = case_when(
-      P_Value < 0.001 ~ "< .001",
-      P_Value < 0.01 ~ sprintf("%.3f", P_Value),
-      P_Value < 0.05 ~ sprintf("%.3f", P_Value),
-      P_Value >= 0.05 ~ sprintf("%.3f", P_Value)
-    ),
-    Variable_clean = gsub("_", " ", Variable),
-    Variable_clean = tools::toTitleCase(Variable_clean)
-  ) %>%
-  select(Variable_clean, OR_formatted, CI_formatted, P_formatted)
-
-# Then create the LaTeX table
-kable(table_data, format = "latex", booktabs = TRUE, 
-      col.names = c("Variable", "Odds Ratio", "95% CI", "p"),
-      caption = "Odds Ratios for Categorical Variables Associated with BZRA Discontinuation")
-
-# Additional formatting function for complex tables
-format_complex_apa_table <- function(results_df) {
-  # Group by variable type if needed
-  table_data <- results_df %>%
-    arrange(Variable) %>%
-    mutate(
-      OR_CI = sprintf("%.2f [%.2f, %.2f]", OR_or_Mean_Diff, CI_Lower, CI_Upper),
-      P_formatted = case_when(
-        P_Value < 0.001 ~ "< .001",
-        TRUE ~ sprintf("%.3f", P_Value)
-      ),
-      Variable_clean = gsub("_", " ", Variable),
-      Variable_clean = tools::toTitleCase(Variable_clean),
-      # Add effect size interpretation
-      Effect_Size_Note = case_when(
-        Effect_Magnitude == "Large" ~ "**",
-        Effect_Magnitude == "Medium" ~ "*",
-        TRUE ~ ""
-      )
-    ) %>%
-    select(Variable_clean, OR_CI, P_formatted, Effect_Size_Note)
-  
-  # Create table with effect size indicators
-  ft <- flextable(table_data) %>%
-    set_header_labels(
-      Variable_clean = "Variable",
-      OR_CI = "OR [95% CI]",
-      P_formatted = "p",
-      Effect_Size_Note = ""
-    ) %>%
-    font(fontname = "Times New Roman", part = "all") %>%
-    fontsize(size = 12, part = "all") %>%
-    align(j = 1, align = "left", part = "body") %>%
-    align(j = 2:4, align = "center", part = "body") %>%
-    bold(part = "header") %>%
-    border_remove() %>%
-    hline_top(border = fp_border(width = 2), part = "header") %>%
-    hline_bottom(border = fp_border(width = 2), part = "header") %>%
-    hline_bottom(border = fp_border(width = 2), part = "body") %>%
-    autofit() %>%
-    add_footer_lines(c(
-      "Note. BZRA = Benzodiazepine receptor agonist; CI = confidence interval; OR = odds ratio.",
-      "* Medium effect size, ** Large effect size."
-    ))
-  
-  return(ft)
-}
 ```
+
 
 
 
