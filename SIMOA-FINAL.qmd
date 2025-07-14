@@ -584,181 +584,6 @@ if(nrow(categorical_effects) > 0) {
 In this section I will run the code for my RFM. I will run it once on my imputed data with 27 variables and once with my imputed data with only 18 variables. After that I will run it on my full dataset to see if any of the variables I have not imputed are meaningfully adding to my results.
 
 ```{r}
-#| label: Random Forest (27 variables)
-
-# =============================
-# --- Load and Install Packages ---
-# =============================
-#install.packages("flexplot")
-#install.packages("tidyverse")
-#install.packages("VSURF")
-#install.packages("ROSE")
-#install.packages("ranger")
-#install.packages("ResourceSelection")
-#install.packages("car")
-
-library(flexplot)
-library(tidyverse)
-library(VSURF)
-library(party)
-library(effects)
-library(ggplot2)
-library(pROC)
-library(ROSE)
-library(ranger)
-library(ResourceSelection)
-library(car)
-
-# =============================
-# --- Create folder for plots ---
-# =============================
-plot_dir <- "VSURF_model_plots"
-if (!dir.exists(plot_dir)) {
-  dir.create(plot_dir)
-}
-
-# =============================
-# --- Data Preparation ---
-# =============================
-colnames(final_dataset_imputed)
-
-vs_analysis_dataset <- final_dataset_imputed %>%
-  mutate(scrn_stopped_bzra = as.factor(Dataset$scrn_stopped_bzra)) %>%
-  filter(!is.na(scrn_stopped_bzra))
-
-# =============================
-# --- Variable Selection with VSURF ---
-# =============================
-vs_mod <- VSURF(scrn_stopped_bzra ~ ., data = vs_analysis_dataset)
-pred_vars <- names(vs_analysis_dataset)[vs_mod$varselect.pred]
-print(pred_vars)
-
-# --- Save VSURF base plots ---
-png(filename = file.path(plot_dir, "vsurf_threshold_plot.png"), width = 800, height = 600)
-plot(vs_mod, step = "thres", imp.mean = FALSE)
-dev.off()
-
-png(filename = file.path(plot_dir, "vsurf_Interpretation_plot.png"), width = 800, height = 600)
-plot(vs_mod, step = "interp", imp.mean = FALSE)
-dev.off()
-
-png(filename = file.path(plot_dir, "vsurf_Predictive_plot.png"), width = 800, height = 600)
-plot(vs_mod, step = "pred", imp.mean = FALSE)
-dev.off()
-
-# =============================
-# --- Class Imbalance Handling (ROSE) ---
-# =============================
-set.seed(123)
-balanced_data <- ovun.sample(scrn_stopped_bzra ~ DBAS_Medications + SURPS_Anxiety_Sensitivity + CISS_Avoidance_Style,
-                             data = vs_analysis_dataset,
-                             method = "both", N = nrow(vs_analysis_dataset))$data
-
-# =============================
-# --- Logistic Regression (Full Model) ---
-# =============================
-mod_Full <- glm(scrn_stopped_bzra ~ DBAS_Medications + SURPS_Anxiety_Sensitivity + CISS_Avoidance_Style,
-                data = balanced_data,
-                family = binomial)
-
-summary(mod_Full)
-exp(coef(mod_Full))
-exp(confint(mod_Full))
-
-# =============================
-# --- Model Comparison (Reduced vs Full) ---
-# =============================
-mod_Red <- glm(scrn_stopped_bzra ~ DBAS_Medications + SURPS_Anxiety_Sensitivity,
-               data = balanced_data,
-               family = binomial)
-
-anova(mod_Red, mod_Full, test = "Chisq")
-print(AIC(mod_Red, mod_Full))
-print(BIC(mod_Red, mod_Full))
-
-# =============================
-# --- Model Diagnostics Using Reduced Model ---
-# =============================
-
-# --- VIF Check ---
-vif(mod_Red)
-
-# --- Predict probabilities ---
-pred_probs <- predict(mod_Red, type = "response")
-
-# --- Hosmer-Lemeshow Test --- (MODEL FIT IS ACCEPTABLE)
-hoslem.test(as.numeric(as.character(balanced_data$scrn_stopped_bzra)), pred_probs)
-
-# --- ROC Curve ---
-roc_obj <- roc(balanced_data$scrn_stopped_bzra, pred_probs)
-
-p_roc <- ggroc(roc_obj) + 
-  ggtitle(paste("ROC Curve (AUC =", round(auc(roc_obj), 3), ")")) +
-  theme_minimal()
-
-ggsave(filename = file.path(plot_dir, "roc_curve.png"), plot = p_roc, width = 6, height = 4)
-
-# --- Density plot of predicted probabilities ---
-balanced_data$pred_prob <- pred_probs
-
-p_density <- ggplot(balanced_data, aes(x = pred_prob, color = scrn_stopped_bzra)) +
-  geom_density() +
-  labs(title = "Density of Predicted Probabilities by Outcome",
-       x = "Predicted Probability", color = "Outcome") +
-  theme_minimal()
-
-ggsave(filename = file.path(plot_dir, "density_pred_prob.png"), plot = p_density, width = 6, height = 4)
-
-# =============================
-# --- Partial Residual Diagnostics Using Reduced Model ---
-# =============================
-balanced_data$partial_resid_DBAS <- residuals(mod_Red, type = "response") +
-  coef(mod_Red)["DBAS_Medications"] * balanced_data$DBAS_Medications
-
-balanced_data$partial_resid_SURPS <- residuals(mod_Red, type = "response") +
-  coef(mod_Red)["SURPS_Anxiety_Sensitivity"] * balanced_data$SURPS_Anxiety_Sensitivity
-
-p1 <- ggplot(balanced_data, aes(x = DBAS_Medications, y = partial_resid_DBAS)) +
-  geom_point(alpha = 0.6) +
-  geom_smooth(method = "loess", se = FALSE, color = "blue") +
-  labs(title = "Partial Residuals: DBAS_Medications") +
-  theme_minimal()
-
-ggsave(filename = file.path(plot_dir, "partial_resid_DBAS.png"), plot = p1, width = 6, height = 4)
-
-p2 <- ggplot(balanced_data, aes(x = SURPS_Anxiety_Sensitivity, y = partial_resid_SURPS)) +
-  geom_point(alpha = 0.6) +
-  geom_smooth(method = "loess", se = FALSE, color = "blue") +
-  labs(title = "Partial Residuals: SURPS_Anxiety_Sensitivity") +
-  theme_minimal()
-
-ggsave(filename = file.path(plot_dir, "partial_resid_SURPS.png"), plot = p2, width = 6, height = 4)
-
-# =============================
-# --- Plot Model Effects with ggplot Using Reduced Model ---
-# =============================
-plot_effect_gg <- function(effect_obj, predictor_name) {
-  df <- as.data.frame(effect_obj[[predictor_name]])
-  ggplot(df, aes_string(x = predictor_name, y = "fit")) +
-    geom_line(color = "blue", size = 1) +
-    geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "lightblue") +
-    labs(title = paste("Effect of", predictor_name),
-         y = "Predicted Probability") +
-    theme_minimal()
-}
-
-eff_all <- allEffects(mod_Red)
-
-p_DBAS <- plot_effect_gg(eff_all, "DBAS_Medications")
-p_SURPS <- plot_effect_gg(eff_all, "SURPS_Anxiety_Sensitivity")
-
-ggsave(filename = file.path(plot_dir, "effect_DBAS.png"), plot = p_DBAS, width = 6, height = 4)
-ggsave(filename = file.path(plot_dir, "effect_SURPS.png"), plot = p_SURPS, width = 6, height = 4)
-
-
-```
-
-```{r}
 #| label: Dustin Fife Method
 
 set.seed(123)
@@ -861,7 +686,6 @@ print(p3)
 # - Subgroup analysis reveals if linear relationship varies by patient characteristics
 # See which variables actually drive your model
 
-
 #Check Variable Importance
 install.packages("party")
 library(party)
@@ -892,7 +716,6 @@ ggplot(imp_df, aes(x = reorder(variable, importance), y = importance)) +
   geom_col() + coord_flip() + 
   labs(x = "Variable", y = "Variable Importance", title = "Random Forest Variable Importance")
 
-
 # CRITICAL FINDING: Binned analysis reveals RF model was CORRECT!
 # Higher DBAS_Medications = LOWER stopping rates (71% at 0-5 meds vs 15% at 21+ meds)
 # Original linear trend was misleading - true relationship is negative with 
@@ -912,9 +735,20 @@ prop.table(table(vs_analysis_dataset$DBAS_bins, vs_analysis_dataset$scrn_stopped
 # - Provider reluctance to deprescribe in complex patients
 # - Patient adherence patterns differ by medication burden
 
+# Get detailed performance metrics
+confusionMatrix(predict(rfsmall_clean), vs_analysis_dataset$scrn_stopped_bzra)
 
+# Calculate AUC-ROC
+library(party)
 
+# Get probabilities for class 1 (stopped benzodiazepines)
+rf_probs <- sapply(treeresponse(rfsmall_clean), function(x) x[2])
 
+# Now calculate AUC-ROC
+library(pROC)
+roc_curve <- roc(vs_analysis_dataset$scrn_stopped_bzra, rf_probs)
+auc(roc_curve)
+plot(roc_curve, main = "ROC Curve for Random Forest Model")
 
 ```
 
