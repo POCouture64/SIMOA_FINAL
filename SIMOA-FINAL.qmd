@@ -758,6 +758,165 @@ ggsave(filename = file.path(plot_dir, "effect_SURPS.png"), plot = p_SURPS, width
 
 ```
 
+```{r}
+#| label: Dustin Fife Method
+
+set.seed(123)
+rfmod <- cforest(scrn_stopped_bzra~., data = vs_analysis_dataset); estimates(rfmod)
+
+rfsmall <- cforest(scrn_stopped_bzra~DBAS_Medications + Extraversion + prov_terr + + CISS_Avoidance_Style + SURPS_Anxiety_Sensitivity + driving_freq + sex + SURPS_Sensation_Seeking + SURPS_Impulsivity, data = vs_analysis_dataset); estimates(rfsmall)
+
+## This model below shown to be a better predictor than the one above with a large number of variables. 
+set.seed(123)
+rfsmall_clean <- cforest(scrn_stopped_bzra ~ DBAS_Medications + driving_freq + sex, 
+                        data = vs_analysis_dataset)
+estimates(rfsmall_clean)
+
+## To confirm that the above model is the best I will add one variable at a time and re-run the model to see if one varibale can be added
+set.seed(123)
+
+# Test CISS_Avoidance_Style (was -0.0002, barely negative)
+rf_test1 <- cforest(scrn_stopped_bzra ~ DBAS_Medications + driving_freq + sex + CISS_Avoidance_Style, 
+                   data = vs_analysis_dataset)
+## Avoidance Style coping appears to be interacting with other predictors since this variable increased in importance since the full model test and the sex importance doubled with this in the model. The OOB error rate was 0.786 
+estimates(rf_test1)
+
+# Test prov_terr (geographic variation might be meaningful)
+rf_test2 <- cforest(scrn_stopped_bzra ~ DBAS_Medications + driving_freq + sex + prov_terr, 
+                   data = vs_analysis_dataset)
+## The importance of this variable was still negative and the accuracy dropped substantially (OOB error rate) to 0.774. This confirms that geography is not a useful predictor of BZRA cessation
+estimates(rf_test2)
+
+# Test SURPS_Anxiety_Sensitivity (was -0.0002, anxiety-related)
+rf_test3 <- cforest(scrn_stopped_bzra ~ DBAS_Medications + driving_freq + sex + SURPS_Anxiety_Sensitivity, 
+                   data = vs_analysis_dataset)
+## The importance of this variable was still negative and the accuracy dropped slightly (OOB error rate) to 0.779. This confirms that Anxiety Sensitivity is not a used predictor of BZRA cessation
+estimates(rf_test3)
+
+###### --------
+## Because of the findings above, I will stick with the 3 variable model as it is the most accurate, parsimonious and the less variables I have, the lowr my chances of overfitting
+###### --------
+
+# 1. DBAS_Medications - your most important predictor
+flexplot(scrn_stopped_bzra ~ DBAS_Medications, data = vs_analysis_dataset, 
+         method = "logistic")
+
+# 2. Driving frequency - your second most important predictor
+ggplot(vs_analysis_dataset, aes(x = factor(driving_freq), fill = factor(scrn_stopped_bzra))) +
+  geom_bar(position = "fill") +
+  labs(y = "Proportion", x = "Driving Frequency", 
+       fill = "Stopped Benzodiazepines") +
+  scale_fill_manual(values = c("0" = "coral", "1" = "turquoise"), 
+                    labels = c("0" = "No", "1" = "Yes")) +
+  theme_minimal()
+
+# 3. Sex - your third predictor
+ggplot(vs_analysis_dataset, aes(x = factor(sex), fill = factor(scrn_stopped_bzra))) +
+  geom_bar(position = "fill") +
+  labs(y = "Proportion", x = "Sex", 
+       fill = "Stopped Benzodiazepines") +
+  scale_fill_manual(values = c("0" = "coral", "1" = "turquoise"), 
+                    labels = c("0" = "No", "1" = "Yes")) +
+  theme_minimal()
+
+install.packages("pdp")
+library(pdp)
+
+# Create plots that match your original visualizations
+p1 <- partial(rfsmall_clean, pred.var = "DBAS_Medications", plot = TRUE)
+p2 <- partial(rfsmall_clean, pred.var = "driving_freq", plot = TRUE)  
+p3 <- partial(rfsmall_clean, pred.var = "sex", plot = TRUE)
+
+# Model validation concern: DBAS_Medications partial dependence shows major 
+# discrepancy from original linear trend. Raw data showed smooth increase 
+# (~0.2 to ~1.0), but RF learned complex non-linear pattern with threshold 
+# effect (flat until ~8 meds, sharp increase 10-15, erratic peaks/valleys). 
+# Suggests potential overfitting, genuine non-linearity, or interactions 
+# with other variables. Requires further investigation.
+print(p1)
+
+## Model validation: Partial dependence plots show excellent fit for driving_freq 
+# and sex variables. The RF model correctly learned that driving_freq 0 and 2 
+# have higher benzodiazepine stopping rates (~0.85, ~0.82) while freq 1 and 3 
+# have lower rates. Sex effects are captured perfectly - sex=2 shows higher 
+# stopping rates (~0.87 vs ~0.61). These patterns match the original data well.
+print(p2)
+print(p3)
+
+### DBAS_Medications Model Validation Investigation
+# Issue: Partial dependence shows non-linear threshold pattern vs linear raw data trend
+# 
+# Investigation steps:
+# 1. Check variable importance to confirm DBAS_Medications drives predictions
+# 2. Examine interactions with driving_freq and sex using 2-way partial plots
+# 3. Analyze raw data distribution for natural breakpoints/thresholds
+# 4. Assess overfitting via OOB error and model complexity
+# 5. Test threshold hypothesis by binning DBAS_Medications (0-5, 6-10, 11-15, 16-20, 21+)
+# 6. Compare linear vs non-linear trends across subgroups (sex × driving_freq)
+# 
+# Expected outcomes:
+# - High variable importance confirms DBAS_Medications relevance
+# - Interaction plots may explain non-linear pattern
+# - Binned analysis tests threshold effect hypothesis
+# - Subgroup analysis reveals if linear relationship varies by patient characteristics
+# See which variables actually drive your model
+
+
+#Check Variable Importance
+install.packages("party")
+library(party)
+
+# Get variable importance
+varimp(rfsmall_clean)
+
+# Plot variable importance
+plot(varimp(rfsmall_clean))
+
+# Get variable importance
+varimp(rfsmall_clean)
+
+# Plot variable importance
+plot(varimp(rfsmall_clean))
+
+# Or create a nicer plot
+imp_values <- varimp(rfsmall_clean)
+print(imp_values)
+
+# Custom plot if you want
+library(ggplot2)
+imp_df <- data.frame(
+  variable = names(imp_values),
+  importance = imp_values
+)
+ggplot(imp_df, aes(x = reorder(variable, importance), y = importance)) +
+  geom_col() + coord_flip() + 
+  labs(x = "Variable", y = "Variable Importance", title = "Random Forest Variable Importance")
+
+
+# CRITICAL FINDING: Binned analysis reveals RF model was CORRECT!
+# Higher DBAS_Medications = LOWER stopping rates (71% at 0-5 meds vs 15% at 21+ meds)
+# Original linear trend was misleading - true relationship is negative with 
+# threshold effects. RF successfully learned this complex pattern.
+# Model validation: CONFIRMED - threshold effect is real and clinically meaningful.
+# Create bins with the correct variable name
+vs_analysis_dataset$DBAS_bins <- cut(vs_analysis_dataset$DBAS_Medications, 
+                                    breaks = c(-1, 5, 10, 15, 20, 30), 
+                                    labels = c("0-5", "6-10", "11-15", "16-20", "21+"))
+
+# Check stopping rates by bins
+table(vs_analysis_dataset$DBAS_bins, vs_analysis_dataset$scrn_stopped_bzra)
+prop.table(table(vs_analysis_dataset$DBAS_bins, vs_analysis_dataset$scrn_stopped_bzra), margin = 1)
+# Possible clinical explanations to explore:
+# - Polypharmacy patients have more complex conditions
+# - Higher medication burden indicates more severe illness
+# - Provider reluctance to deprescribe in complex patients
+# - Patient adherence patterns differ by medication burden
+
+
+
+
+
+```
 
 
 
