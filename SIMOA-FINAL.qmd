@@ -581,6 +581,7 @@ if(nrow(categorical_effects) > 0) {
 ```
 
 ## Random Forest Model
+
 In this section I will run the code for my RFM. I will run it once on my imputed data with 27 variables and once with my imputed data with only 18 variables. After that I will run it on my full dataset to see if any of the variables I have not imputed are meaningfully adding to my results.
 
 ```{r}
@@ -751,11 +752,3 @@ auc(roc_curve)
 plot(roc_curve, main = "ROC Curve for Random Forest Model")
 
 ```
-
-
-
-
-
-
-
-
