@@ -588,14 +588,15 @@ In this section I will run the code for my RFM. I will run it once on my imputed
 #| label: Dustin Fife Method
 
 set.seed(123)
-rfmod <- cforest(scrn_stopped_bzra~., data = vs_analysis_dataset); estimates(rfmod)
+library(party)
+rfmod <- cforest(scrn_stopped_bzra~., data = analysis_dataset); estimates(rfmod)
 
-rfsmall <- cforest(scrn_stopped_bzra~DBAS_Medications + Extraversion + prov_terr + + CISS_Avoidance_Style + SURPS_Anxiety_Sensitivity + driving_freq + sex + SURPS_Sensation_Seeking + SURPS_Impulsivity, data = vs_analysis_dataset); estimates(rfsmall)
+rfsmall <- cforest(scrn_stopped_bzra~DBAS_Medications + Extraversion + prov_terr + + CISS_Avoidance_Style + SURPS_Anxiety_Sensitivity + driving_freq + sex + SURPS_Sensation_Seeking + SURPS_Impulsivity, data = analysis_dataset); estimates(rfsmall)
 
 ## This model below shown to be a better predictor than the one above with a large number of variables. 
 set.seed(123)
 rfsmall_clean <- cforest(scrn_stopped_bzra ~ DBAS_Medications + driving_freq + sex, 
-                        data = vs_analysis_dataset)
+                        data = analysis_dataset)
 estimates(rfsmall_clean)
 
 ## To confirm that the above model is the best I will add one variable at a time and re-run the model to see if one varibale can be added
@@ -603,19 +604,19 @@ set.seed(123)
 
 # Test CISS_Avoidance_Style (was -0.0002, barely negative)
 rf_test1 <- cforest(scrn_stopped_bzra ~ DBAS_Medications + driving_freq + sex + CISS_Avoidance_Style, 
-                   data = vs_analysis_dataset)
+                   data = analysis_dataset)
 ## Avoidance Style coping appears to be interacting with other predictors since this variable increased in importance since the full model test and the sex importance doubled with this in the model. The OOB error rate was 0.786 
 estimates(rf_test1)
 
 # Test prov_terr (geographic variation might be meaningful)
 rf_test2 <- cforest(scrn_stopped_bzra ~ DBAS_Medications + driving_freq + sex + prov_terr, 
-                   data = vs_analysis_dataset)
+                   data = analysis_dataset)
 ## The importance of this variable was still negative and the accuracy dropped substantially (OOB error rate) to 0.774. This confirms that geography is not a useful predictor of BZRA cessation
 estimates(rf_test2)
 
 # Test SURPS_Anxiety_Sensitivity (was -0.0002, anxiety-related)
 rf_test3 <- cforest(scrn_stopped_bzra ~ DBAS_Medications + driving_freq + sex + SURPS_Anxiety_Sensitivity, 
-                   data = vs_analysis_dataset)
+                   data = analysis_dataset)
 ## The importance of this variable was still negative and the accuracy dropped slightly (OOB error rate) to 0.779. This confirms that Anxiety Sensitivity is not a used predictor of BZRA cessation
 estimates(rf_test3)
 
@@ -624,11 +625,11 @@ estimates(rf_test3)
 ###### --------
 
 # 1. DBAS_Medications - your most important predictor
-flexplot(scrn_stopped_bzra ~ DBAS_Medications, data = vs_analysis_dataset, 
+flexplot(scrn_stopped_bzra ~ DBAS_Medications, data = analysis_dataset, 
          method = "logistic")
 
 # 2. Driving frequency - your second most important predictor
-ggplot(vs_analysis_dataset, aes(x = factor(driving_freq), fill = factor(scrn_stopped_bzra))) +
+ggplot(analysis_dataset, aes(x = factor(driving_freq), fill = factor(scrn_stopped_bzra))) +
   geom_bar(position = "fill") +
   labs(y = "Proportion", x = "Driving Frequency", 
        fill = "Stopped Benzodiazepines") +
@@ -637,7 +638,7 @@ ggplot(vs_analysis_dataset, aes(x = factor(driving_freq), fill = factor(scrn_sto
   theme_minimal()
 
 # 3. Sex - your third predictor
-ggplot(vs_analysis_dataset, aes(x = factor(sex), fill = factor(scrn_stopped_bzra))) +
+ggplot(analysis_dataset, aes(x = factor(sex), fill = factor(scrn_stopped_bzra))) +
   geom_bar(position = "fill") +
   labs(y = "Proportion", x = "Sex", 
        fill = "Stopped Benzodiazepines") +
@@ -723,13 +724,13 @@ ggplot(imp_df, aes(x = reorder(variable, importance), y = importance)) +
 # threshold effects. RF successfully learned this complex pattern.
 # Model validation: CONFIRMED - threshold effect is real and clinically meaningful.
 # Create bins with the correct variable name
-vs_analysis_dataset$DBAS_bins <- cut(vs_analysis_dataset$DBAS_Medications, 
+analysis_dataset$DBAS_bins <- cut(analysis_dataset$DBAS_Medications, 
                                     breaks = c(-1, 5, 10, 15, 20, 30), 
                                     labels = c("0-5", "6-10", "11-15", "16-20", "21+"))
 
 # Check stopping rates by bins
-table(vs_analysis_dataset$DBAS_bins, vs_analysis_dataset$scrn_stopped_bzra)
-prop.table(table(vs_analysis_dataset$DBAS_bins, vs_analysis_dataset$scrn_stopped_bzra), margin = 1)
+table(analysis_dataset$DBAS_bins, analysis_dataset$scrn_stopped_bzra)
+prop.table(table(analysis_dataset$DBAS_bins, analysis_dataset$scrn_stopped_bzra), margin = 1)
 # Possible clinical explanations to explore:
 # - Polypharmacy patients have more complex conditions
 # - Higher medication burden indicates more severe illness
@@ -737,7 +738,7 @@ prop.table(table(vs_analysis_dataset$DBAS_bins, vs_analysis_dataset$scrn_stopped
 # - Patient adherence patterns differ by medication burden
 
 # Get detailed performance metrics
-confusionMatrix(predict(rfsmall_clean), vs_analysis_dataset$scrn_stopped_bzra)
+confusionMatrix(predict(rfsmall_clean), analysis_dataset$scrn_stopped_bzra)
 
 # Calculate AUC-ROC
 library(party)
@@ -747,8 +748,280 @@ rf_probs <- sapply(treeresponse(rfsmall_clean), function(x) x[2])
 
 # Now calculate AUC-ROC
 library(pROC)
-roc_curve <- roc(vs_analysis_dataset$scrn_stopped_bzra, rf_probs)
+roc_curve <- roc(analysis_dataset$scrn_stopped_bzra, rf_probs)
 auc(roc_curve)
 plot(roc_curve, main = "ROC Curve for Random Forest Model")
 
 ```
+
+```{r}
+# Load required libraries
+library(party)
+library(randomForest) 
+library(caret)
+library(ggplot2)
+library(dplyr)
+library(pROC)
+
+# Set seed for reproducibility
+set.seed(123)
+
+# === DIAGNOSTIC FUNCTION ===
+trace_warnings <- function(expr) {
+  withCallingHandlers(
+    expr,
+    warning = function(w) {
+      if (grepl("row names were found from a short variable", w$message)) {
+        cat("WARNING DETECTED AT:\n")
+        print(sys.calls())
+        cat("\nWARNING MESSAGE:\n", w$message, "\n\n")
+      }
+    }
+  )
+}
+
+# === 1. DATA PREPARATION ===
+cat("=== DATA PREPARATION ===\n")
+str(analysis_dataset)
+cat("Outcome distribution:\n")
+print(prop.table(table(analysis_dataset$scrn_stopped_bzra)))
+
+# Missing values check
+missing_summary <- analysis_dataset %>%
+  summarise_all(~sum(is.na(.))) %>%
+  gather(variable, missing_count) %>%
+  filter(missing_count > 0) %>%
+  arrange(desc(missing_count))
+if(nrow(missing_summary) > 0) print(missing_summary)
+
+# === 2. TRAIN-TEST SPLIT ===
+train_indices <- createDataPartition(analysis_dataset$scrn_stopped_bzra, p = 0.8, list = FALSE)
+train_data <- analysis_dataset[train_indices, ]
+test_data <- analysis_dataset[-train_indices, ]
+
+cat("Split verification - Training:", round(prop.table(table(train_data$scrn_stopped_bzra))[2], 3),
+    "| Test:", round(prop.table(table(test_data$scrn_stopped_bzra))[2], 3), "\n")
+
+# === 3. BASELINE FULL MODEL ===
+full_formula <- as.formula(paste("scrn_stopped_bzra ~", 
+                                paste(setdiff(names(analysis_dataset), "scrn_stopped_bzra"), 
+                                      collapse = " + ")))
+
+rf_full <- cforest(full_formula, data = train_data,
+                   controls = cforest_unbiased(ntree = 1000, mtry = 3))
+
+full_importance <- varimp(rf_full, conditional = TRUE)
+cat("Full model - Top 10 variables:\n")
+print(head(sort(full_importance, decreasing = TRUE), 10))
+
+# === 4. VARIABLE SELECTION PLOT ===
+imp_df_full <- data.frame(
+  variable = names(full_importance),
+  importance = full_importance
+) %>%
+  arrange(desc(importance)) %>%
+  slice_head(n = 15)
+
+full_imp_plot <- ggplot(imp_df_full, aes(x = reorder(variable, importance), y = importance)) +
+  geom_col(fill = "steelblue", alpha = 0.7) + 
+  coord_flip() + 
+  labs(x = "Variable", y = "Variable Importance", 
+       title = "Top 15 Variables - Full Model Importance") +
+  theme_minimal()
+print(full_imp_plot)
+
+# === 5-6. ITERATIVE MODEL REFINEMENT WITH DIAGNOSTICS ===
+top_vars <- names(full_importance[full_importance > 0])
+cat("\nVariables with positive importance:", length(top_vars), "\n")
+
+# Helper function for clean balancing
+balance_data <- function(train_df, vars_to_use) {
+  tryCatch({
+    library(ROSE)
+    rose_input <- train_df[, c(vars_to_use, "outcome_factor")]
+    row.names(rose_input) <- NULL  # Clean input
+    
+    rose_result <- ROSE(outcome_factor ~ ., data = rose_input, seed = 123)
+    balanced <- as.data.frame(rose_result$data)
+    row.names(balanced) <- NULL  # Clean output
+    
+    return(list(data = balanced, method = "ROSE"))
+  }, error = function(e) {
+    # Manual oversampling with clean row names
+    stopped <- train_df[train_df$outcome_factor == "Stopped", ]
+    still_using <- train_df[train_df$outcome_factor == "Still_Using", ]
+    row.names(stopped) <- NULL
+    row.names(still_using) <- NULL
+    
+    n_stopped <- nrow(stopped)
+    n_still_using <- nrow(still_using)
+    replication_factor <- ceiling(n_still_using / n_stopped)
+    
+    replicated <- stopped[rep(1:n_stopped, replication_factor), ]
+    replicated <- replicated[1:n_still_using, ]
+    row.names(replicated) <- NULL
+    
+    balanced <- rbind(still_using, replicated)
+    balanced <- balanced[sample(nrow(balanced)), ]
+    row.names(balanced) <- NULL
+    
+    return(list(data = balanced, method = "manual"))
+  })
+}
+
+if(length(top_vars) >= 3) {
+  # Data preparation
+  train_data$scrn_stopped_bzra <- as.numeric(as.character(train_data$scrn_stopped_bzra))
+  test_data$scrn_stopped_bzra <- as.numeric(as.character(test_data$scrn_stopped_bzra))
+  train_data$outcome_factor <- factor(train_data$scrn_stopped_bzra, levels = c(0, 1), labels = c("Still_Using", "Stopped"))
+  test_data$outcome_factor <- factor(test_data$scrn_stopped_bzra, levels = c(0, 1), labels = c("Still_Using", "Stopped"))
+  
+  # Test different variable counts with diagnostics
+  var_counts <- unique(c(3, 5, 7, length(top_vars))[c(3, 5, 7, length(top_vars)) <= length(top_vars)])
+  results <- list()
+  
+  cat("\n=== TESTING MODELS WITH DIAGNOSTICS ===\n")
+  
+  trace_warnings({
+    for(n_vars in var_counts) {
+      test_vars <- names(sort(full_importance, decreasing = TRUE))[1:n_vars]
+      test_vars <- test_vars[test_vars %in% names(train_data)]
+      
+      if(length(test_vars) == n_vars) {
+        # Balance data with clean approach
+        balance_result <- balance_data(train_data, test_vars)
+        balanced_data <- balance_result$data
+        
+        cat("Using", balance_result$method, "balancing for", n_vars, "variables\n")
+        
+        # Build and test model
+        test_formula <- as.formula(paste("outcome_factor ~", paste(test_vars, collapse = " + ")))
+        rf_test <- cforest(test_formula, data = balanced_data,
+                          controls = cforest_unbiased(ntree = 1000, mtry = floor(sqrt(length(test_vars)))))
+        
+        test_pred <- predict(rf_test, newdata = test_data)
+        test_pred_numeric <- ifelse(test_pred == "Stopped", 1, 0)
+        accuracy <- mean(test_pred_numeric == test_data$scrn_stopped_bzra)
+        
+        cm <- confusionMatrix(test_pred, test_data$outcome_factor, positive = "Stopped")
+        
+        results[[as.character(n_vars)]] <- list(
+          variables = test_vars,
+          accuracy = accuracy,
+          sensitivity = unname(cm$byClass["Sensitivity"]),
+          specificity = unname(cm$byClass["Specificity"]),
+          balanced_accuracy = unname(cm$byClass["Balanced Accuracy"])
+        )
+        
+        cat(n_vars, "variables - Accuracy:", round(accuracy, 3), 
+            "| Sensitivity:", round(cm$byClass["Sensitivity"], 3),
+            "| Specificity:", round(cm$byClass["Specificity"], 3), "\n")
+      }
+    }
+  })
+  
+  # Find best model
+  best_balanced_acc <- 0
+  best_n_vars <- 3
+  
+  for(n in names(results)) {
+    if(!is.na(results[[n]]$balanced_accuracy) && results[[n]]$balanced_accuracy > best_balanced_acc) {
+      best_balanced_acc <- results[[n]]$balanced_accuracy
+      best_n_vars <- as.numeric(n)
+    }
+  }
+  
+  cat("\nBest model uses", best_n_vars, "variables with balanced accuracy:", round(best_balanced_acc, 3), "\n")
+
+  # === 7-8. FINAL MODEL ===
+  final_vars <- names(sort(full_importance, decreasing = TRUE))[1:best_n_vars]
+  final_vars <- final_vars[final_vars %in% names(train_data)]
+  
+  cat("\nFinal model variables:", paste(final_vars, collapse = ", "), "\n")
+  
+  # Build final model with diagnostics
+  trace_warnings({
+    balance_result <- balance_data(train_data, final_vars)
+    balanced_final_data <- balance_result$data
+    cat("Final model using", balance_result$method, "balancing\n")
+    
+    final_formula <- as.formula(paste("outcome_factor ~", paste(final_vars, collapse = " + ")))
+    rf_final <- cforest(final_formula, data = balanced_final_data,
+                       controls = cforest_unbiased(ntree = 1000, mtry = floor(sqrt(length(final_vars)))))
+  })
+  
+  # Final evaluation
+  final_importance <- varimp(rf_final, conditional = TRUE)
+  final_test_pred <- predict(rf_final, newdata = test_data)
+  final_test_pred_numeric <- ifelse(final_test_pred == "Stopped", 1, 0)
+  final_cm <- confusionMatrix(final_test_pred, test_data$outcome_factor, positive = "Stopped")
+  
+  # ROC Analysis
+  final_auc <- tryCatch({
+    tree_responses <- treeresponse(rf_final, newdata = test_data)
+    final_probs <- sapply(tree_responses, function(x) {
+      if("Stopped" %in% names(x)) return(as.numeric(x["Stopped"]))
+      if(length(x) >= 2) return(as.numeric(x[2]))
+      return(0.5)
+    })
+    final_roc <- roc(test_data$scrn_stopped_bzra, final_probs, quiet = TRUE)
+    auc(final_roc)
+  }, error = function(e) NA)
+  
+  # === 9. VISUALIZATION ===
+  # Variable importance plot
+  final_imp_df <- data.frame(
+    variable = names(final_importance[final_importance > 0]),
+    importance = final_importance[final_importance > 0]
+  )
+  
+  if(nrow(final_imp_df) > 0) {
+    final_imp_plot <- ggplot(final_imp_df, aes(x = reorder(variable, importance), y = importance)) +
+      geom_col(fill = "darkgreen", alpha = 0.7) + 
+      coord_flip() + 
+      labs(x = "Variable", y = "Variable Importance", 
+           title = "Final Model Variable Importance") +
+      theme_minimal()
+    print(final_imp_plot)
+  }
+  
+  # ROC plot if available
+  if(!is.na(final_auc)) {
+    tryCatch({
+      roc_plot <- ggroc(final_roc) +
+        geom_abline(intercept = 1, slope = 1, linetype = "dashed", color = "gray") +
+        labs(title = paste("ROC Curve (AUC =", round(final_auc, 3), ")"),
+             x = "Specificity", y = "Sensitivity") +
+        theme_minimal()
+      print(roc_plot)
+    }, error = function(e) cat("ROC plot failed\n"))
+  }
+  
+  # === 10. FINAL SUMMARY ===
+  cat("\n=== FINAL MODEL SUMMARY ===\n")
+  cat("Variables:", paste(final_vars, collapse = ", "), "\n")
+  cat("Number of variables:", length(final_vars), "\n")
+  cat("Test Accuracy:", round(final_cm$overall["Accuracy"], 3), "\n")
+  if(!is.na(final_auc)) cat("Test AUC:", round(final_auc, 3), "\n")
+  cat("Sensitivity (recall):", round(final_cm$byClass["Sensitivity"], 3), "\n")
+  cat("Specificity:", round(final_cm$byClass["Specificity"], 3), "\n")
+  cat("Precision:", round(final_cm$byClass["Pos Pred Value"], 3), "\n")
+  cat("Balanced Accuracy:", round(final_cm$byClass["Balanced Accuracy"], 3), "\n")
+  
+  # Practical results
+  actual_stopped <- sum(test_data$scrn_stopped_bzra)
+  predicted_stopped <- sum(final_test_pred_numeric)
+  cat("\nActually stopped:", actual_stopped, "| Predicted to stop:", predicted_stopped, "\n")
+  
+  if(predicted_stopped > actual_stopped * 0.5) {
+    cat("✅ Model predicts reasonable number of stops!\n")
+  } else {
+    cat("⚠️  Still under-predicting stops\n")
+  }
+  
+} else {
+  cat("Error: Insufficient variables with positive importance\n")
+}
+
+```
+
