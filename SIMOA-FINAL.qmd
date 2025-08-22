@@ -392,7 +392,8 @@ cat("Created 'modeling_dataset' with 16 main psychological scales (no demographi
 cat("This may be more appropriate for your random forest model.\n")
 ```
 
-## Group Comparison
+## Data Analysis
+Here I am preparing the data by adding the outcome varibale and ensuring I have merged the imputed dataset into the one with the outcome varibale
 
 ```{r}
 #| label: Data Preparation
@@ -410,6 +411,41 @@ cat("Analysis dataset size:", nrow(analysis_dataset), "\n")
 cat("Outcome variable distribution:\n")
 table(analysis_dataset$scrn_stopped_bzra, useNA = "always")
 
+```
+## Cohort Comparison
+Here I am calculating the stats for the entire sample together rather than separated by the outcome variable. 
+
+```{r}
+#| label: Cohort Calculations
+# Variables to convert to numeric
+numeric_vars <- c("DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications", 
+                  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness", 
+                  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity", 
+                  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style", "age")
+
+# All variables to analyze (including categorical ones)
+all_vars <- c(numeric_vars, "sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income")
+
+# Convert specified variables to numeric
+analysis_dataset[numeric_vars] <- lapply(analysis_dataset[numeric_vars], function(x) as.numeric(as.character(x)))
+
+# Calculate means and SDs for numeric variables
+numeric_stats <- data.frame(
+  Variable = numeric_vars,
+  Mean = round(sapply(analysis_dataset[numeric_vars], mean), 2),
+  SD = round(sapply(analysis_dataset[numeric_vars], sd), 2)
+)
+
+print("NUMERIC VARIABLES:")
+print(numeric_stats)
+
+# Show frequency tables for categorical variables
+categorical_vars <- c("sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income")
+print("CATEGORICAL VARIABLES:")
+for(var in categorical_vars) {
+  cat("\n", var, ":\n")
+  print(table(analysis_dataset[[var]]))
+}
 ```
 
 ```{r}
@@ -556,7 +592,7 @@ for(var in vars_to_compare) {
 ```
 
 ```{r}
-#| label: Summarry of Meaningful Differences
+#| label: Summary of Meaningful Differences
 
 cat("\n=== SUMMARY OF MEANINGFUL EFFECTS ===\n")
 
