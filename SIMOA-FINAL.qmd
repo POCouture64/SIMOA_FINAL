@@ -1186,6 +1186,10 @@ cat("\n=== ANALYSIS COMPLETE ===\n")
 
 This section will have 2 purposes. The first will be to confirm the results of the RFM with regression and the second purpose will be to check for other variables not included in the RFM such as experiencing AEs or other groups of variables we decided to examine (these should be based on previous research)
 
+```{r}
+
+```
+
 
 ## 2.4 Personality Profiles
 
@@ -1195,9 +1199,6 @@ This section will look to examine whether a combination of traits or a "set" is 
 #| label: Cluster Analysis
 # OPTIMIZED CLUSTER ANALYSIS FOR PERSONALITY PROFILES & CESSATION
 # Refined approach for n=398, cessation rate=23.4%
-
-#install.packages("factoextra")
-#install.packages("NbClust")
 
 library(dplyr)
 library(cluster)
@@ -1347,6 +1348,274 @@ cat("CLUSTER DESCRIPTIONS:\n")
 for(i in 1:k_optimal) {
   describe_cluster(i)
 }
+
+# =============================================================================
+# STEP 6: COMPARE WITH K=2 SOLUTION (BASED ON NBCLUST CONSENSUS)
+# =============================================================================
+
+cat("\n=== COMPARISON WITH K=2 CLUSTERS ===\n")
+
+# Try k=2 based on NbClust majority recommendation
+set.seed(123)
+final_clusters_k2 <- kmeans(personality_scaled, centers = 2, nstart = 50, iter.max = 100)
+personality_data$cluster_k2 <- as.factor(final_clusters_k2$cluster)
+
+# Validation metrics for k=2
+cat("K=2 Cluster Validation Metrics:\n")
+cat("Between-cluster SS / Total SS:", round(final_clusters_k2$betweenss/final_clusters_k2$totss, 3), "\n")
+cat("Average silhouette width:", round(mean(silhouette(final_clusters_k2$cluster, dist(personality_scaled))[,3]), 3), "\n\n")
+
+# Cluster sizes for k=2
+cat("Cluster sizes (k=2):\n")
+print(table(personality_data$cluster_k2))
+
+# Cessation analysis for k=2
+cessation_k2 <- personality_data %>%
+  group_by(cluster_k2) %>%
+  summarise(
+    n = n(),
+    cessations = sum(scrn_stopped_bzra),
+    cessation_rate = mean(scrn_stopped_bzra),
+    cessation_rate_ci_lower = binom.test(sum(scrn_stopped_bzra), n())$conf.int[1],
+    cessation_rate_ci_upper = binom.test(sum(scrn_stopped_bzra), n())$conf.int[2],
+    .groups = "drop"
+  )
+
+cat("\nCessation Analysis by Personality Cluster (k=2):\n")
+print(cessation_k2)
+
+# Statistical test for k=2
+chi_sq_k2 <- chisq.test(personality_data$cluster_k2, personality_data$scrn_stopped_bzra)
+fisher_k2 <- fisher.test(personality_data$cluster_k2, personality_data$scrn_stopped_bzra)
+
+cat("\nStatistical tests (k=2):\n")
+cat("Chi-square =", round(chi_sq_k2$statistic, 3), ", p-value =", round(chi_sq_k2$p.value, 4), "\n")
+cat("Fisher's exact p-value =", round(fisher_k2$p.value, 4), "\n")
+cat("Fisher's OR (95% CI) =", round(fisher_k2$estimate, 2), 
+    " (", round(fisher_k2$conf.int[1], 2), "-", round(fisher_k2$conf.int[2], 2), ")\n")
+
+# Effect size for k=2
+cramers_v_k2 <- sqrt(chi_sq_k2$statistic / (nrow(personality_data) * (2 - 1)))
+cat("Cramer's V (effect size) =", round(cramers_v_k2, 3), "\n\n")
+
+# =============================================================================
+# STEP 7: BINARY COMPARISON - HIGH DISTRESS VS OTHERS
+# =============================================================================
+
+cat("=== BINARY COMPARISON: HIGH DISTRESS vs OTHERS ===\n")
+
+# Create binary variable: Cluster 1 (high distress, low cessation) vs Others
+personality_data$high_distress <- ifelse(personality_data$cluster == 1, "High_Distress", "Other")
+personality_data$high_distress <- as.factor(personality_data$high_distress)
+
+# Cessation analysis for binary grouping
+cessation_binary <- personality_data %>%
+  group_by(high_distress) %>%
+  summarise(
+    n = n(),
+    cessations = sum(scrn_stopped_bzra),
+    cessation_rate = mean(scrn_stopped_bzra),
+    cessation_rate_ci_lower = binom.test(sum(scrn_stopped_bzra), n())$conf.int[1],
+    cessation_rate_ci_upper = binom.test(sum(scrn_stopped_bzra), n())$conf.int[2],
+    .groups = "drop"
+  )
+
+cat("Cessation rates by distress profile:\n")
+print(cessation_binary)
+
+# Statistical test for binary comparison
+chi_sq_binary <- chisq.test(personality_data$high_distress, personality_data$scrn_stopped_bzra)
+fisher_binary <- fisher.test(personality_data$high_distress, personality_data$scrn_stopped_bzra)
+
+cat("\nStatistical tests (High Distress vs Others):\n")
+cat("Chi-square p-value =", round(chi_sq_binary$p.value, 4), "\n")
+cat("Fisher's exact p-value =", round(fisher_binary$p.value, 4), "\n")
+cat("Odds Ratio =", round(fisher_binary$estimate, 2), 
+    " (", round(fisher_binary$conf.int[1], 2), "-", round(fisher_binary$conf.int[2], 2), ")\n\n")
+
+# =============================================================================
+# STEP 8: FINAL COMPARISON AND RECOMMENDATIONS
+# =============================================================================
+
+cat("=== FINAL COMPARISON OF ALL APPROACHES ===\n")
+cat("K=3 clusters: Chi-sq p =", round(chi_sq_test$p.value, 4), ", Cramer's V =", round(cramers_v, 3), "\n")
+cat("K=2 clusters: Chi-sq p =", round(chi_sq_k2$p.value, 4), ", Cramer's V =", round(cramers_v_k2, 3), "\n")
+cat("Binary comparison: Fisher p =", round(fisher_binary$p.value, 4), ", OR =", round(fisher_binary$estimate, 2), "\n\n")
+
+# Determine best approach
+best_p <- min(chi_sq_test$p.value, chi_sq_k2$p.value, fisher_binary$p.value)
+if(best_p == fisher_binary$p.value) {
+  cat("RECOMMENDATION: Binary comparison (High Distress vs Others) shows strongest evidence\n")
+} else if(best_p == chi_sq_k2$p.value) {
+  cat("RECOMMENDATION: K=2 cluster solution shows strongest evidence\n") 
+} else {
+  cat("RECOMMENDATION: K=3 cluster solution shows strongest evidence\n")
+}
+
 ```
 
+```{r}
+#| label: Cluster Analysis + Additional Statistics
+
+# ADDITIONAL STATISTICS TO STRENGTHEN THE BINARY COMPARISON ARGUMENT
+
+# =============================================================================
+# 1. SENSITIVITY, SPECIFICITY, AND PREDICTIVE VALUES
+# =============================================================================
+
+cat("=== DIAGNOSTIC PERFORMANCE METRICS ===\n")
+
+# Create confusion matrix (High Distress predicting failure to stop)
+# Note: We'll predict "failure to stop" (scrn_stopped_bzra = 0)
+failure_to_stop <- 1 - personality_data$scrn_stopped_bzra
+high_distress_binary <- ifelse(personality_data$high_distress == "High_Distress", 1, 0)
+
+# Confusion matrix
+conf_matrix <- table(Predicted = high_distress_binary, Actual = failure_to_stop)
+print("Confusion Matrix (High Distress predicting failure to stop):")
+print(conf_matrix)
+
+# Calculate diagnostic metrics
+sensitivity <- conf_matrix[2,2] / sum(conf_matrix[,2])  # True positive rate
+specificity <- conf_matrix[1,1] / sum(conf_matrix[,1])  # True negative rate
+ppv <- conf_matrix[2,2] / sum(conf_matrix[2,])          # Positive predictive value
+npv <- conf_matrix[1,1] / sum(conf_matrix[1,])          # Negative predictive value
+accuracy <- (conf_matrix[1,1] + conf_matrix[2,2]) / sum(conf_matrix)
+
+cat("\nDiagnostic Performance:\n")
+cat("Sensitivity (detecting failure in high-distress):", round(sensitivity, 3), "\n")
+cat("Specificity (detecting success in non-high-distress):", round(specificity, 3), "\n")
+cat("Positive Predictive Value:", round(ppv, 3), "\n")
+cat("Negative Predictive Value:", round(npv, 3), "\n")
+cat("Overall Accuracy:", round(accuracy, 3), "\n\n")
+
+# =============================================================================
+# 2. NUMBER NEEDED TO TREAT (NNT) / NUMBER NEEDED TO HARM (NNH)
+# =============================================================================
+
+cat("=== CLINICAL IMPACT METRICS ===\n")
+
+# Calculate absolute risk difference
+high_distress_failure_rate <- mean(failure_to_stop[high_distress_binary == 1])
+other_failure_rate <- mean(failure_to_stop[high_distress_binary == 0])
+absolute_risk_difference <- high_distress_failure_rate - other_failure_rate
+
+cat("High distress failure rate:", round(high_distress_failure_rate, 3), "\n")
+cat("Other groups failure rate:", round(other_failure_rate, 3), "\n")
+cat("Absolute risk difference:", round(absolute_risk_difference, 3), "\n")
+
+# Number needed to harm (since high distress increases failure risk)
+nnh <- 1 / absolute_risk_difference
+cat("Number Needed to Harm (NNH):", round(nnh, 1), "\n")
+cat("Interpretation: For every", round(nnh, 0), "patients with high distress profile,")
+cat(" 1 additional patient will fail cessation compared to other profiles\n\n")
+
+# =============================================================================
+# 3. EFFECT SIZE MEASURES
+# =============================================================================
+
+cat("=== ADDITIONAL EFFECT SIZE MEASURES ===\n")
+
+# Cohen's h for difference between proportions
+p1 <- high_distress_failure_rate
+p2 <- other_failure_rate
+cohens_h <- 2 * (asin(sqrt(p1)) - asin(sqrt(p2)))
+
+cat("Cohen's h (effect size for proportions):", round(cohens_h, 3), "\n")
+cat("Interpretation:")
+if(abs(cohens_h) < 0.2) cat(" Small effect\n")
+if(abs(cohens_h) >= 0.2 & abs(cohens_h) < 0.5) cat(" Small to medium effect\n")
+if(abs(cohens_h) >= 0.5 & abs(cohens_h) < 0.8) cat(" Medium effect\n")
+if(abs(cohens_h) >= 0.8) cat(" Large effect\n")
+
+# Relative Risk
+relative_risk <- high_distress_failure_rate / other_failure_rate
+rr_ci <- exp(log(relative_risk) + c(-1,1) * qnorm(0.975) * sqrt(
+  (1/sum(failure_to_stop[high_distress_binary == 1])) - (1/sum(high_distress_binary == 1)) +
+  (1/sum(failure_to_stop[high_distress_binary == 0])) - (1/sum(high_distress_binary == 0))
+))
+
+cat("Relative Risk:", round(relative_risk, 2), 
+    " (95% CI:", round(rr_ci[1], 2), "-", round(rr_ci[2], 2), ")\n\n")
+
+# =============================================================================
+# 4. ROBUSTNESS CHECKS
+# =============================================================================
+
+cat("=== ROBUSTNESS CHECKS ===\n")
+
+# Bootstrap confidence intervals for OR
+library(boot)
+or_boot <- function(data, indices) {
+  d <- data[indices, ]
+  tab <- table(d$high_distress, d$scrn_stopped_bzra)
+  if(any(tab == 0)) return(NA)  # Handle cases where bootstrap sample has zero cells
+  return(fisher.test(tab)$estimate)
+}
+
+set.seed(123)
+boot_results <- boot(personality_data, or_boot, R = 1000)
+boot_ci <- boot.ci(boot_results, type = "perc")
+
+cat("Bootstrap 95% CI for Odds Ratio: (", round(boot_ci$percent[4], 2), 
+    "-", round(boot_ci$percent[5], 2), ")\n")
+
+# Permutation test for additional confirmation
+permutation_test <- function(n_perm = 1000) {
+  observed_diff <- high_distress_failure_rate - other_failure_rate
+  perm_diffs <- numeric(n_perm)
+  
+  set.seed(123)
+  for(i in 1:n_perm) {
+    perm_groups <- sample(high_distress_binary)
+    perm_diffs[i] <- mean(failure_to_stop[perm_groups == 1]) - mean(failure_to_stop[perm_groups == 0])
+  }
+  
+  p_value <- mean(abs(perm_diffs) >= abs(observed_diff))
+  return(list(observed = observed_diff, p_value = p_value))
+}
+
+perm_result <- permutation_test()
+cat("Permutation test p-value:", round(perm_result$p_value, 4), "\n\n")
+
+# =============================================================================
+# 5. CLINICAL SIGNIFICANCE ASSESSMENT
+# =============================================================================
+
+cat("=== CLINICAL SIGNIFICANCE ASSESSMENT ===\n")
+
+# Calculate how many additional failures occur due to high distress profile
+total_high_distress <- sum(high_distress_binary)
+expected_failures_if_average <- total_high_distress * other_failure_rate
+actual_failures <- sum(failure_to_stop[high_distress_binary == 1])
+excess_failures <- actual_failures - expected_failures_if_average
+
+cat("In your sample of", total_high_distress, "high-distress patients:\n")
+cat("Expected failures if they had average risk:", round(expected_failures_if_average, 1), "\n")
+cat("Actual failures observed:", actual_failures, "\n")
+cat("Excess failures due to high distress profile:", round(excess_failures, 1), "\n")
+cat("Percentage increase in failures:", round((excess_failures/expected_failures_if_average)*100, 1), "%\n\n")
+
+# =============================================================================
+# 6. VALIDATION METRICS
+# =============================================================================
+
+cat("=== MODEL VALIDATION ===\n")
+
+# Simple logistic regression for comparison
+logit_model <- glm(scrn_stopped_bzra ~ high_distress, data = personality_data, family = binomial)
+cat("Logistic regression summary:\n")
+print(summary(logit_model))
+
+# AUC (Area Under Curve) - though simple with binary predictor
+library(pROC)
+roc_obj <- roc(personality_data$scrn_stopped_bzra, as.numeric(personality_data$high_distress == "Other"))
+auc_value <- auc(roc_obj)
+cat("AUC (Area Under Curve):", round(auc_value, 3), "\n")
+
+# Likelihood ratio
+null_model <- glm(scrn_stopped_bzra ~ 1, data = personality_data, family = binomial)
+lr_test <- anova(null_model, logit_model, test = "LRT")
+cat("Likelihood Ratio Test p-value:", round(lr_test$`Pr(>Chi)`[2], 4), "\n")
+```
 
