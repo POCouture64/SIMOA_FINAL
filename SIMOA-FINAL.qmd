@@ -412,7 +412,9 @@ cat("Outcome variable distribution:\n")
 table(analysis_dataset$scrn_stopped_bzra, useNA = "always")
 
 ```
-## Cohort Comparison
+## 2.1 Group Differences
+
+Cohort Comparison
 Here I am calculating the stats for the entire sample together rather than separated by the outcome variable. 
 
 ```{r}
@@ -421,30 +423,73 @@ Here I am calculating the stats for the entire sample together rather than separ
 numeric_vars <- c("DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications", 
                   "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness", 
                   "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity", 
-                  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style", "age")
-
-# All variables to analyze (including categorical ones)
-all_vars <- c(numeric_vars, "sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income")
+                  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style","osss_3_score", "phq2_score", "age")
 
 # Convert specified variables to numeric
 analysis_dataset[numeric_vars] <- lapply(analysis_dataset[numeric_vars], function(x) as.numeric(as.character(x)))
 
+# CREATE GROUPED VARIABLES (using your exact grouping logic)
+
+# Create regional groupings for prov_terr variable
+if("prov_terr" %in% names(analysis_dataset)) {
+  analysis_dataset$prov_terr_region <- case_when(
+    analysis_dataset$prov_terr %in% c(1, 2, 3, 12) ~ "Prairies",
+    analysis_dataset$prov_terr %in% c(9, 11) ~ "Central Canada", 
+    analysis_dataset$prov_terr %in% c(4, 5, 7, 10) ~ "Atlantic Canada",
+    analysis_dataset$prov_terr %in% c(6, 8, 13) ~ "Territories",
+    TRUE ~ NA_character_
+  )
+  
+  # Convert to factor for proper ordering
+  analysis_dataset$prov_terr_region <- factor(analysis_dataset$prov_terr_region,
+                                             levels = c("Prairies", "Central Canada", 
+                                                       "Atlantic Canada", "Territories"))
+}
+
+# Create education groupings
+if("education" %in% names(analysis_dataset)) {
+  analysis_dataset$education_level <- case_when(
+    analysis_dataset$education %in% c(1, 2, 3) ~ "High School or Less",
+    analysis_dataset$education %in% c(4, 5) ~ "Trade School/University",
+    TRUE ~ NA_character_
+  )
+  
+  # Convert to factor for proper ordering
+  analysis_dataset$education_level <- factor(analysis_dataset$education_level,
+                                            levels = c("High School or Less", "Trade School/University"))
+}
+
+# Create employment groupings
+if("employment" %in% names(analysis_dataset)) {
+  analysis_dataset$employment_status <- case_when(
+    analysis_dataset$employment %in% c(0, 3, 4) ~ "Retired/Not in Workforce",
+    analysis_dataset$employment %in% c(1, 2) ~ "Full- or Part-Time",
+    TRUE ~ NA_character_
+  )
+  
+  # Convert to factor for proper ordering
+  analysis_dataset$employment_status <- factor(analysis_dataset$employment_status,
+                                              levels = c("Full- or Part-Time", "Retired/Not in Workforce"))
+}
+
+# All variables to analyze (using grouped versions for the three variables)
+all_vars <- c(numeric_vars, "sex", "gender", "prov_terr_region", "education_level", "employment_status", "driving_freq", "income")
+
 # Calculate means and SDs for numeric variables
 numeric_stats <- data.frame(
   Variable = numeric_vars,
-  Mean = round(sapply(analysis_dataset[numeric_vars], mean), 2),
-  SD = round(sapply(analysis_dataset[numeric_vars], sd), 2)
+  Mean = round(sapply(analysis_dataset[numeric_vars], function(x) mean(x, na.rm = TRUE)), 2),
+  SD = round(sapply(analysis_dataset[numeric_vars], function(x) sd(x, na.rm = TRUE)), 2)
 )
-
 print("NUMERIC VARIABLES:")
 print(numeric_stats)
 
-# Show frequency tables for categorical variables
-categorical_vars <- c("sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income")
+# Show frequency tables for categorical variables (using grouped versions)
+categorical_vars <- c("sex", "gender", "prov_terr_region", "education_level", "employment_status", "driving_freq", "income")
 print("CATEGORICAL VARIABLES:")
 for(var in categorical_vars) {
   cat("\n", var, ":\n")
-  print(table(analysis_dataset[[var]]))
+  print(table(analysis_dataset[[var]], useNA = "always"))
 }
 ```
 
@@ -472,6 +517,7 @@ results <- data.frame(
 #| label: Continous Variables
 
 cat("\n=== CONTINUOUS VARIABLES: COHEN'S D AND MEAN DIFFERENCES ===\n")
+
 for(var in vars_to_compare) {
   if(is.numeric(analysis_dataset[[var]])) {
     cat(sprintf("\n--- %s ---\n", var))
@@ -485,8 +531,7 @@ for(var in vars_to_compare) {
     group1 <- group1[!is.na(group1)]
     
     # Calculate pooled standard deviation
-    pooled_sd <- sqrt(((length(group0)-1)*sd(group0)^2 + 
-                       (length(group1)-1)*sd(group1)^2) / 
+    pooled_sd <- sqrt(((length(group0)-1)*sd(group0)^2 + (length(group1)-1)*sd(group1)^2) / 
                       (length(group0) + length(group1) - 2))
     
     # Calculate Cohen's d
@@ -495,100 +540,219 @@ for(var in vars_to_compare) {
     # Determine magnitude
     magnitude <- case_when(
       abs(cohens_d) < 0.2 ~ "negligible",
-      abs(cohens_d) < 0.5 ~ "small",
+      abs(cohens_d) < 0.5 ~ "small", 
       abs(cohens_d) < 0.8 ~ "medium",
       TRUE ~ "large"
     )
     
-    # T-test for mean difference and CI
-    t_result <- t.test(analysis_dataset[[var]] ~ analysis_dataset$scrn_stopped_bzra)
-    # Fix: Calculate mean difference correctly (group1 - group0)
-    mean_diff <- t_result$estimate[2] - t_result$estimate[1]  # Or use: -diff(t_result$estimate)
+    # T-test for mean difference and CI - run in reversed direction
+    # This will give us Group0 - Group1 directly
+    t_result <- t.test(analysis_dataset[[var]][analysis_dataset$scrn_stopped_bzra == 0], 
+                       analysis_dataset[[var]][analysis_dataset$scrn_stopped_bzra == 1])
     
-    # Group means (fix the printing issue)
-    group_means <- analysis_dataset %>%
+    # Now the results are directly Group0 - Group1
+    mean_diff <- t_result$estimate[1] - t_result$estimate[2]
+    ci_lower <- t_result$conf.int[1]
+    ci_upper <- t_result$conf.int[2]
+    
+    # Group means and SDs
+    group_stats <- analysis_dataset %>%
       group_by(scrn_stopped_bzra) %>%
-      summarise(mean = mean(!!sym(var), na.rm = TRUE), .groups = "drop")
+      summarise(mean = mean(!!sym(var), na.rm = TRUE),
+                sd = sd(!!sym(var), na.rm = TRUE),
+                .groups = "drop")
     
-    cat(sprintf("Cohen's d: %.3f (%s)\n", cohens_d, magnitude))
-    cat(sprintf("Mean difference (Group1 - Group0): %.3f (95%% CI: %.3f to %.3f)\n", 
-                mean_diff, t_result$conf.int[1], t_result$conf.int[2]))
-    cat("Group means:\n")
-    for(i in 1:nrow(group_means)) {
-      cat(sprintf("  Group %d: %.3f\n", group_means$scrn_stopped_bzra[i], group_means$mean[i]))
+    cat(sprintf("Cohen's d: %.2f (%s)\n", cohens_d, magnitude))
+    cat(sprintf("Mean difference (Group0 - Group1): %.2f (95%% CI: %.2f to %.2f)\n", 
+                mean_diff, ci_lower, ci_upper))
+    cat("Group means and SDs:\n")
+    for(i in 1:nrow(group_stats)) {
+      cat(sprintf("  Group %d: Mean = %.2f, SD = %.2f\n", 
+                  group_stats$scrn_stopped_bzra[i], group_stats$mean[i], group_stats$sd[i]))
     }
     cat("\n")
     
     # Add to results
     results <- rbind(results, data.frame(
       Variable = var,
-      Type = "Continuous",
-      Effect_Size = cohens_d,
+      Type = "Continuous", 
+      Effect_Size = round(cohens_d, 2),
       Effect_Magnitude = magnitude,
-      OR_or_Mean_Diff = mean_diff,
-      CI_Lower = t_result$conf.int[1],
-      CI_Upper = t_result$conf.int[2],
+      OR_or_Mean_Diff = round(mean_diff, 2),
+      CI_Lower = round(ci_lower, 2),
+      CI_Upper = round(ci_upper, 2),
       P_Value = t_result$p.value
     ))
   }
 }
-
+    
+   
 ```
 
 ```{r}
 #| label: Categorical Variables
 
+# Create regional groupings for prov_terr variable
+if("prov_terr" %in% names(analysis_dataset)) {
+  # First, check what values exist in the original prov_terr variable
+  cat("Original prov_terr values:\n")
+  print(table(analysis_dataset$prov_terr, useNA = "ifany"))
+  
+  analysis_dataset$prov_terr_region <- case_when(
+    analysis_dataset$prov_terr %in% c(1, 2, 3, 12) ~ "Prairies",
+    analysis_dataset$prov_terr %in% c(9, 11) ~ "Central Canada", 
+    analysis_dataset$prov_terr %in% c(4, 5, 7, 10) ~ "Atlantic Canada",
+    analysis_dataset$prov_terr %in% c(6, 8, 13) ~ "Territories",
+    TRUE ~ NA_character_
+  )
+  
+  # Check which values didn't get assigned
+  unassigned <- analysis_dataset[is.na(analysis_dataset$prov_terr_region) & !is.na(analysis_dataset$prov_terr), "prov_terr"]
+  if(length(unassigned) > 0) {
+    cat("\nUnassigned prov_terr values (these became NA):\n")
+    print(table(unassigned))
+  }
+  
+  # Convert to factor for proper ordering
+  analysis_dataset$prov_terr_region <- factor(analysis_dataset$prov_terr_region,
+                                             levels = c("Prairies", "Central Canada", 
+                                                       "Atlantic Canada", "Territories"))
+  
+  cat("\nRegional groupings created for prov_terr:\n")
+  print(table(analysis_dataset$prov_terr_region, useNA = "ifany"))
+}
+
+# Create education groupings
+if("education" %in% names(analysis_dataset)) {
+  analysis_dataset$education_level <- case_when(
+    analysis_dataset$education %in% c(1, 2, 3) ~ "High School or Less",
+    analysis_dataset$education %in% c(4, 5) ~ "Trade School/University",
+    TRUE ~ NA_character_
+  )
+  
+  # Convert to factor for proper ordering
+  analysis_dataset$education_level <- factor(analysis_dataset$education_level,
+                                            levels = c("High School or Less", "Trade School/University"))
+  
+  cat("\nEducation groupings created for education:\n")
+  print(table(analysis_dataset$education_level, useNA = "ifany"))
+}
+
+# Create employment groupings
+if("employment" %in% names(analysis_dataset)) {
+  analysis_dataset$employment_status <- case_when(
+    analysis_dataset$employment %in% c(0, 3, 4) ~ "Retired/Not in Workforce",
+    analysis_dataset$employment %in% c(1, 2) ~ "Full- or Part-Time",
+    TRUE ~ NA_character_
+  )
+  
+  # Convert to factor for proper ordering
+  analysis_dataset$employment_status <- factor(analysis_dataset$employment_status,
+                                              levels = c("Full- or Part-Time", "Retired/Not in Workforce"))
+  
+  cat("\nEmployment groupings created for employment:\n")
+  print(table(analysis_dataset$employment_status, useNA = "ifany"))
+}
+
 cat("\n=== CATEGORICAL VARIABLES: ODDS RATIOS ===\n")
+
+# Update vars_to_compare to include the new regional, education, and employment variables
+if("prov_terr" %in% vars_to_compare) {
+  vars_to_compare <- vars_to_compare[vars_to_compare != "prov_terr"]
+  vars_to_compare <- c(vars_to_compare, "prov_terr_region")
+}
+
+if("education" %in% vars_to_compare) {
+  vars_to_compare <- vars_to_compare[vars_to_compare != "education"]
+  vars_to_compare <- c(vars_to_compare, "education_level")
+}
+
+if("employment" %in% vars_to_compare) {
+  vars_to_compare <- vars_to_compare[vars_to_compare != "employment"]
+  vars_to_compare <- c(vars_to_compare, "employment_status")
+}
 
 for(var in vars_to_compare) {
   if(!is.numeric(analysis_dataset[[var]])) {
     cat(sprintf("\n--- %s ---\n", var))
     
-    # Create 2x2 table
-    cross_tab <- table(analysis_dataset[[var]], analysis_dataset$scrn_stopped_bzra)
+    # Create cross-tabulation table
+    cross_tab <- table(analysis_dataset[[var]], analysis_dataset$scrn_stopped_bzra, useNA = "no")
     
-    # Calculate proportions
-    props <- prop.table(cross_tab, margin = 2)
-    cat("Proportions by group:\n")
-    print(props)
-    
-    # Calculate OR for each category vs reference
-    if(nrow(cross_tab) == 2) {
-      # Binary variable
-      or_result <- fisher.test(cross_tab)
-      cat(sprintf("Odds Ratio: %.3f (95%% CI: %.3f to %.3f)\n", 
-                  or_result$estimate, or_result$conf.int[1], or_result$conf.int[2]))
+    # Only proceed if we have valid data
+    if(nrow(cross_tab) > 0 && ncol(cross_tab) > 0) {
+      # Show counts
+      cat("Counts by group:\n")
+      print(cross_tab)
       
-      # Add to results
-      results <- rbind(results, data.frame(
-        Variable = var,
-        Type = "Binary",
-        Effect_Size = or_result$estimate,
-        Effect_Magnitude = ifelse(or_result$estimate > 2 | or_result$estimate < 0.5, "Large", 
-                                 ifelse(or_result$estimate > 1.5 | or_result$estimate < 0.67, "Medium", "Small")),
-        OR_or_Mean_Diff = or_result$estimate,
-        CI_Lower = or_result$conf.int[1],
-        CI_Upper = or_result$conf.int[2],
-        P_Value = or_result$p.value
-      ))
-      
-    } else {
-      # Multi-category variable - calculate OR for each level
-      cat("Multi-category variable - ORs calculated against first category:\n")
-      
-      for(i in 2:nrow(cross_tab)) {
-        # Create 2x2 table for this category vs reference
-        temp_tab <- rbind(cross_tab[1,], cross_tab[i,])
-        or_result <- fisher.test(temp_tab)
-        
-        cat(sprintf("%s vs %s: OR = %.3f (95%% CI: %.3f to %.3f)\n", 
-                    rownames(cross_tab)[i], rownames(cross_tab)[1],
-                    or_result$estimate, or_result$conf.int[1], or_result$conf.int[2]))
+      if(nrow(cross_tab) > 1) {
+        if(nrow(cross_tab) == 2) {
+          # Binary variable - calculate OR with confidence intervals
+          tryCatch({
+            or_result <- fisher.test(cross_tab)
+            
+            cat(sprintf("Odds Ratio (stopped vs not stopped): %.3f (95%% CI: %.3f to %.3f)\n", 
+                        or_result$estimate, or_result$conf.int[1], or_result$conf.int[2]))
+            cat(sprintf("Fisher's exact test p-value: %.3f\n", or_result$p.value))
+            
+            # Add to results
+            results <- rbind(results, data.frame(
+              Variable = var,
+              Type = "Binary",
+              Effect_Size = or_result$estimate,
+              Effect_Magnitude = ifelse(or_result$estimate > 2 | or_result$estimate < 0.5, "Large", 
+                                       ifelse(or_result$estimate > 1.5 | or_result$estimate < 0.67, "Medium", "Small")),
+              OR_or_Mean_Diff = or_result$estimate,
+              CI_Lower = or_result$conf.int[1],
+              CI_Upper = or_result$conf.int[2],
+              P_Value = or_result$p.value
+            ))
+            
+          }, error = function(e) {
+            cat("Error calculating OR for binary variable\n")
+            print(e$message)
+          })
+          
+        } else {
+          # Multi-category variable - use Fisher's exact test with simulation
+          tryCatch({
+            fisher_result <- fisher.test(cross_tab, simulate.p.value = TRUE, B = 10000)
+            
+            cat(sprintf("Fisher's exact test p-value (simulated): %.3f\n", fisher_result$p.value))
+            cat("Multi-category variable - overall association with stopping behavior\n")
+            
+            # Calculate effect size using Cramer's V
+            chi_sq <- chisq.test(cross_tab)
+            n <- sum(cross_tab)
+            cramers_v <- sqrt(chi_sq$statistic / (n * (min(nrow(cross_tab), ncol(cross_tab)) - 1)))
+            cat(sprintf("Cramer's V (effect size): %.3f\n", cramers_v))
+            
+            # Add to results
+            results <- rbind(results, data.frame(
+              Variable = var,
+              Type = "Multi-category",
+              Effect_Size = cramers_v,
+              Effect_Magnitude = ifelse(cramers_v > 0.3, "Large", 
+                                       ifelse(cramers_v > 0.1, "Medium", "Small")),
+              OR_or_Mean_Diff = NA,
+              CI_Lower = NA,
+              CI_Upper = NA,
+              P_Value = fisher_result$p.value
+            ))
+            
+          }, error = function(e) {
+            cat("Error calculating Fisher's exact test for multi-category variable\n")
+            print(e$message)
+          })
+        }
+      } else {
+        cat("Only one category present - cannot calculate statistics\n")
       }
+    } else {
+      cat("No valid data for cross-tabulation\n")
     }
   }
 }
-
 ```
 
 ```{r}
@@ -616,7 +780,7 @@ if(nrow(categorical_effects) > 0) {
 
 ```
 
-## Random Forest Model
+## 2.2 Random Forest Model
 
 In this section I will run the code for my RFM. I will run it once on my imputed data with 27 variables and once with my imputed data with only 18 variables. After that I will run it on my full dataset to see if any of the variables I have not imputed are meaningfully adding to my results.
 
@@ -1017,3 +1181,172 @@ cat("- DBAS_Medications 3x more important than other predictors confirms thresho
 cat("\n=== ANALYSIS COMPLETE ===\n")
 
 ```
+
+## 2.3 Regression Confirmation
+
+This section will have 2 purposes. The first will be to confirm the results of the RFM with regression and the second purpose will be to check for other variables not included in the RFM such as experiencing AEs or other groups of variables we decided to examine (these should be based on previous research)
+
+
+## 2.4 Personality Profiles
+
+This section will look to examine whether a combination of traits or a "set" is linked to BZRA cessation. Rather than looking at personality variables independently of one another, this will seek to connect them to see if their exists a profile of BZRA discontinuers in our data. 
+
+```{r}
+#| label: Cluster Analysis
+# OPTIMIZED CLUSTER ANALYSIS FOR PERSONALITY PROFILES & CESSATION
+# Refined approach for n=398, cessation rate=23.4%
+
+#install.packages("factoextra")
+#install.packages("NbClust")
+
+library(dplyr)
+library(cluster)
+library(factoextra)
+library(NbClust)
+
+# Prepare data with complete cases
+personality_vars <- c("Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+                     "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
+                     "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
+                     "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications")
+
+personality_data <- analysis_dataset[complete.cases(analysis_dataset[personality_vars]), 
+                                   c(personality_vars, "scrn_stopped_bzra")]
+
+# Standardize variables for clustering
+personality_scaled <- scale(personality_data[personality_vars])
+
+# =============================================================================
+# STEP 1: DETERMINE OPTIMAL NUMBER OF CLUSTERS
+# =============================================================================
+
+# Method 1: Elbow method
+set.seed(123)
+fviz_nbclust(personality_scaled, kmeans, method = "wss", k.max = 8) + 
+  labs(title = "Elbow Method for Optimal k")
+
+# Method 2: Silhouette method
+fviz_nbclust(personality_scaled, kmeans, method = "silhouette", k.max = 8) +
+  labs(title = "Silhouette Method for Optimal k")
+
+# Method 3: Gap statistic (more robust)
+set.seed(123)  # Set seed before calling clusGap
+gap_stat <- clusGap(personality_scaled, FUN = kmeans, K.max = 8, B = 50)
+fviz_gap_stat(gap_stat) + labs(title = "Gap Statistic Method")
+
+# Method 4: NbClust consensus (uses multiple criteria)
+nb_result <- NbClust(personality_scaled, distance = "euclidean", 
+                     min.nc = 2, max.nc = 8, method = "kmeans")
+print("NbClust consensus recommendation:")
+print(table(nb_result$Best.nc[1,]))
+
+# =============================================================================
+# STEP 2: PERFORM CLUSTERING WITH OPTIMAL K
+# =============================================================================
+
+# Based on the methods above, choose k (likely 3 or 4)
+k_optimal <- 3  # Adjust based on your results
+
+# Perform final clustering
+set.seed(123)
+final_clusters <- kmeans(personality_scaled, centers = k_optimal, nstart = 50, iter.max = 100)
+
+# Add cluster assignments
+personality_data$cluster <- as.factor(final_clusters$cluster)
+
+# =============================================================================
+# STEP 3: VALIDATE AND INTERPRET CLUSTERS
+# =============================================================================
+
+# Cluster validation metrics
+cat("Cluster Validation Metrics:\n")
+cat("Between-cluster SS / Total SS:", round(final_clusters$betweenss/final_clusters$totss, 3), "\n")
+cat("Average silhouette width:", round(mean(silhouette(final_clusters$cluster, dist(personality_scaled))[,3]), 3), "\n\n")
+
+# Cluster sizes
+cat("Cluster sizes:\n")
+print(table(personality_data$cluster))
+
+# Cluster characteristics (means for each variable)
+cluster_profiles <- personality_data %>%
+  group_by(cluster) %>%
+  summarise(across(all_of(personality_vars), mean, .names = "mean_{.col}"),
+            n = n(),
+            .groups = "drop")
+
+print("Cluster Personality Profiles:")
+print(cluster_profiles)
+
+# =============================================================================
+# STEP 4: CESSATION ANALYSIS BY CLUSTER
+# =============================================================================
+
+# Cessation rates by cluster
+cessation_by_cluster <- personality_data %>%
+  group_by(cluster) %>%
+  summarise(
+    n = n(),
+    cessations = sum(scrn_stopped_bzra),
+    cessation_rate = mean(scrn_stopped_bzra),
+    cessation_rate_ci_lower = binom.test(sum(scrn_stopped_bzra), n())$conf.int[1],
+    cessation_rate_ci_upper = binom.test(sum(scrn_stopped_bzra), n())$conf.int[2],
+    .groups = "drop"
+  )
+
+cat("\nCessation Analysis by Personality Cluster:\n")
+print(cessation_by_cluster)
+
+# Statistical test for cluster differences
+chi_sq_test <- chisq.test(personality_data$cluster, personality_data$scrn_stopped_bzra)
+cat("\nChi-square test for cluster differences in cessation:\n")
+cat("Chi-square =", round(chi_sq_test$statistic, 3), "\n")
+cat("p-value =", round(chi_sq_test$p.value, 4), "\n")
+
+# Effect size (Cramer's V)
+cramers_v <- sqrt(chi_sq_test$statistic / (nrow(personality_data) * (min(nrow(cessation_by_cluster), 2) - 1)))
+cat("Cramer's V (effect size) =", round(cramers_v, 3), "\n")
+
+# Post-hoc pairwise comparisons (if overall test is significant)
+if(chi_sq_test$p.value < 0.05) {
+  cat("\nPost-hoc pairwise comparisons (Fisher's exact tests):\n")
+  clusters <- levels(personality_data$cluster)
+  for(i in 1:(length(clusters)-1)) {
+    for(j in (i+1):length(clusters)) {
+      subset_data <- personality_data[personality_data$cluster %in% c(clusters[i], clusters[j]), ]
+      fisher_test <- fisher.test(subset_data$cluster, subset_data$scrn_stopped_bzra)
+      cat("Cluster", clusters[i], "vs", clusters[j], ": OR =", 
+          round(fisher_test$estimate, 2), ", p =", round(fisher_test$p.value, 4), "\n")
+    }
+  }
+}
+
+# =============================================================================
+# STEP 5: CREATE INTERPRETABLE CLUSTER DESCRIPTIONS
+# =============================================================================
+
+# Function to create cluster descriptions
+describe_cluster <- function(cluster_num) {
+  cluster_data <- personality_data[personality_data$cluster == cluster_num, personality_vars]
+  overall_means <- colMeans(personality_data[personality_vars])
+  cluster_means <- colMeans(cluster_data)
+  
+  # Find variables that are notably high or low (>0.5 SD from overall mean)
+  differences <- (cluster_means - overall_means) / apply(personality_data[personality_vars], 2, sd)
+  high_vars <- names(differences[differences > 0.5])
+  low_vars <- names(differences[differences < -0.5])
+  
+  cat("Cluster", cluster_num, "Profile:\n")
+  cat("Size: n =", nrow(cluster_data), "\n")
+  cat("Cessation rate:", round(mean(personality_data$scrn_stopped_bzra[personality_data$cluster == cluster_num]), 2), "\n")
+  if(length(high_vars) > 0) cat("Higher than average:", paste(high_vars, collapse = ", "), "\n")
+  if(length(low_vars) > 0) cat("Lower than average:", paste(low_vars, collapse = ", "), "\n")
+  cat("\n")
+}
+
+cat("CLUSTER DESCRIPTIONS:\n")
+for(i in 1:k_optimal) {
+  describe_cluster(i)
+}
+```
+
+
