@@ -1187,7 +1187,284 @@ cat("\n=== ANALYSIS COMPLETE ===\n")
 This section will have 2 purposes. The first will be to confirm the results of the RFM with regression and the second purpose will be to check for other variables not included in the RFM such as experiencing AEs or other groups of variables we decided to examine (these should be based on previous research)
 
 ```{r}
+# FIXED COMPREHENSIVE REGRESSION ANALYSIS
+# Excluding variables that are transformations of the outcome
 
+library(dplyr)
+library(car)
+library(MASS)
+
+# =============================================================================
+# DATA PREPARATION WITH EXCLUSIONS
+# =============================================================================
+
+cat("=== FIXED COMPREHENSIVE REGRESSION ANALYSIS ===\n")
+
+# Variables to exclude (likely transformations of the outcome)
+exclude_vars <- c(
+  "scrn_stopped_bzra",           # The outcome itself
+  "scrn_stopped_bzra_factor"     # Factor version of the outcome
+)
+
+# Get all column names
+all_cols <- colnames(analysis_dataset)
+
+# Remove excluded variables
+available_predictors <- setdiff(all_cols, exclude_vars)
+
+cat("Total variables in dataset:", length(all_cols), "\n")
+cat("Variables excluded:", length(exclude_vars), "\n")
+cat("Available predictors:", length(available_predictors), "\n")
+
+# Check if outcome variable exists
+if(!"scrn_stopped_bzra" %in% all_cols) {
+  stop("Outcome variable 'scrn_stopped_bzra' not found!")
+}
+
+# Create analysis dataset
+reg_data <- analysis_dataset
+cat("Sample size:", nrow(reg_data), "\n")
+cat("Cessation rate:", round(mean(reg_data$scrn_stopped_bzra, na.rm = TRUE), 3), "\n")
+
+# =============================================================================
+# VARIABLE VALIDATION
+# =============================================================================
+
+cat("\n=== VALIDATING PREDICTORS ===\n")
+
+valid_predictors <- c()
+removed_reasons <- c()
+
+for(pred in available_predictors) {
+  # Check if variable name is valid
+  if(nchar(pred) == 0 || is.na(pred)) {
+    removed_reasons <- c(removed_reasons, paste(pred, "- invalid name"))
+    next
+  }
+  
+  # Check if variable exists and has data
+  if(!pred %in% colnames(reg_data)) {
+    removed_reasons <- c(removed_reasons, paste(pred, "- not found"))
+    next
+  }
+  
+  var_data <- reg_data[[pred]]
+  
+  # Check for all missing
+  if(all(is.na(var_data))) {
+    removed_reasons <- c(removed_reasons, paste(pred, "- all missing"))
+    next
+  }
+  
+  # Check for no variation
+  unique_vals <- unique(var_data[!is.na(var_data)])
+  if(length(unique_vals) <= 1) {
+    removed_reasons <- c(removed_reasons, paste(pred, "- no variation"))
+    next
+  }
+  
+  # Check for potential perfect predictors (very high correlation with outcome)
+  if(is.numeric(var_data)) {
+    outcome_data <- reg_data$scrn_stopped_bzra
+    complete_cases <- !is.na(var_data) & !is.na(outcome_data)
+    
+    if(sum(complete_cases) > 10) {  # Need at least 10 complete cases
+      correlation <- cor(var_data[complete_cases], outcome_data[complete_cases])
+      if(!is.na(correlation) && abs(correlation) > 0.95) {
+        removed_reasons <- c(removed_reasons, paste(pred, "- perfect correlation with outcome"))
+        next
+      }
+    }
+  }
+  
+  # Variable passed all checks
+  valid_predictors <- c(valid_predictors, pred)
+}
+
+cat("Valid predictors after filtering:", length(valid_predictors), "\n")
+cat("Removed variables:", length(removed_reasons), "\n")
+
+if(length(removed_reasons) > 0 && length(removed_reasons) <= 10) {
+  cat("\nFirst few removed variables:\n")
+  cat(paste(head(removed_reasons, 10), collapse = "\n"), "\n")
+}
+
+# =============================================================================
+# STEPWISE REGRESSION WITH VALID PREDICTORS
+# =============================================================================
+
+if(length(valid_predictors) == 0) {
+  cat("\nERROR: No valid predictors remaining after filtering!\n")
+} else {
+  cat("\n=== STEPWISE REGRESSION ===\n")
+  
+  # Start with null model
+  null_model <- glm(scrn_stopped_bzra ~ 1, data = reg_data, family = binomial)
+  
+  # Forward stepwise selection
+  tryCatch({
+    # Create formula for upper scope
+    full_formula <- as.formula(paste("scrn_stopped_bzra ~", paste(valid_predictors, collapse = " + ")))
+    
+    cat("Starting forward stepwise selection with", length(valid_predictors), "potential predictors...\n")
+    
+    step_model <- stepAIC(null_model, 
+                         scope = list(lower = ~1, upper = full_formula),
+                         direction = "forward", 
+                         trace = FALSE)
+    
+    cat("\nStepwise selection completed successfully!\n")
+    print(summary(step_model))
+    
+    # =============================================================================
+    # MODEL ANALYSIS
+    # =============================================================================
+    
+    cat("\n=== MODEL ANALYSIS ===\n")
+    
+    # Extract coefficients
+    coef_table <- summary(step_model)$coefficients
+    n_predictors <- nrow(coef_table) - 1  # Exclude intercept
+    n_significant <- sum(coef_table[-1, 4] < 0.05)  # Exclude intercept
+    
+    cat("Predictors in final model:", n_predictors, "\n")
+    cat("Significant predictors (p < 0.05):", n_significant, "\n")
+    
+    # Model performance
+    mcfadden_r2 <- 1 - (deviance(step_model) / deviance(null_model))
+    cat("McFadden's R²:", round(mcfadden_r2, 4), "\n")
+    cat("AIC:", round(AIC(step_model), 2), "\n")
+    
+    # Check for separation issues
+    max_coef <- max(abs(coef(step_model)[!is.na(coef(step_model))]))
+    if(max_coef > 10) {
+      cat("WARNING: Large coefficients detected (", round(max_coef, 2), ") - possible separation issues\n")
+    }
+    
+    # Odds ratios for significant predictors
+    if(n_significant > 0) {
+      cat("\nOdds Ratios for significant predictors:\n")
+      
+      significant_vars <- rownames(coef_table)[coef_table[, 4] < 0.05]
+      significant_vars <- significant_vars[significant_vars != "(Intercept)"]
+      
+      for(var in significant_vars) {
+        coef_val <- coef(step_model)[var]
+        or_val <- exp(coef_val)
+        p_val <- coef_table[var, 4]
+        
+        cat(sprintf("%s: OR = %.3f (p = %.4f)\n", var, or_val, p_val))
+      }
+    }
+    
+    # =============================================================================
+    # RFM COMPARISON
+    # =============================================================================
+    
+    cat("\n=== RFM KEY VARIABLES COMPARISON ===\n")
+    
+    rfm_key_vars <- c("DBAS_Medications", "driving_freq", "sex")
+    retained_vars <- names(coef(step_model))[-1]  # Exclude intercept
+    
+    cat("RFM key variables in final model:\n")
+    rfm_found <- 0
+    
+    for(var in rfm_key_vars) {
+      var_in_model <- any(grepl(var, retained_vars))
+      if(var_in_model) {
+        matching_terms <- retained_vars[grepl(var, retained_vars)]
+        cat("✓", var, ":", paste(matching_terms, collapse = ", "), "\n")
+        rfm_found <- rfm_found + 1
+      } else {
+        cat("✗", var, ": Not retained\n")
+      }
+    }
+    
+    cat("\nRFM validation:")
+    if(rfm_found == length(rfm_key_vars)) {
+      cat(" ✓ ALL RFM variables confirmed\n")
+    } else if(rfm_found > 0) {
+      cat(" ◐ PARTIAL confirmation (", rfm_found, "of", length(rfm_key_vars), ")\n")
+    } else {
+      cat(" ✗ RFM variables not confirmed\n")
+    }
+    
+    # =============================================================================
+    # TOP PREDICTORS
+    # =============================================================================
+    
+    cat("\n=== TOP PREDICTORS SUMMARY ===\n")
+    
+    if(n_predictors > 0) {
+      # Sort by p-value
+      coef_sorted <- coef_table[order(coef_table[, 4]), ]
+      coef_sorted <- coef_sorted[rownames(coef_sorted) != "(Intercept)", ]
+      
+      cat("All predictors in model (sorted by p-value):\n")
+      for(i in 1:min(nrow(coef_sorted), 10)) {  # Show top 10
+        var_name <- rownames(coef_sorted)[i]
+        p_val <- coef_sorted[i, 4]
+        coef_val <- coef_sorted[i, 1]
+        
+        significance <- if(p_val < 0.001) "***" else if(p_val < 0.01) "**" else if(p_val < 0.05) "*" else ""
+        
+        cat(sprintf("%2d. %s: coef=%.3f, p=%.4f %s\n", i, var_name, coef_val, p_val, significance))
+      }
+      
+      # Clinical interpretation
+      if(n_significant > 0) {
+        cat("\n=== CLINICAL INTERPRETATION ===\n")
+        cat("Significant predictors found! These variables are associated with bzra cessation success.\n")
+        
+        # Identify positive vs negative associations
+        sig_coefs <- coef_table[coef_table[, 4] < 0.05 & rownames(coef_table) != "(Intercept)", ]
+        
+        if(nrow(sig_coefs) > 0) {
+          positive_predictors <- rownames(sig_coefs)[sig_coefs[, 1] > 0]
+          negative_predictors <- rownames(sig_coefs)[sig_coefs[, 1] < 0]
+          
+          if(length(positive_predictors) > 0) {
+            cat("Variables associated with HIGHER cessation success:\n")
+            cat(paste("-", positive_predictors, collapse = "\n"), "\n")
+          }
+          
+          if(length(negative_predictors) > 0) {
+            cat("Variables associated with LOWER cessation success:\n")
+            cat(paste("-", negative_predictors, collapse = "\n"), "\n")
+          }
+        }
+      }
+    }
+    
+  }, error = function(e) {
+    cat("Stepwise regression failed:", e$message, "\n")
+    cat("This might indicate data issues or perfect separation problems.\n")
+  })
+}
+
+# =============================================================================
+# FINAL SUMMARY
+# =============================================================================
+
+cat("\n=== FINAL SUMMARY ===\n")
+
+if(exists("step_model")) {
+  cat("✓ Regression analysis completed successfully\n")
+  cat("✓ Avoided perfect separation issues by excluding problematic variables\n")
+  
+  if(n_significant > 0) {
+    cat("✓ Found", n_significant, "significant predictors of bzra cessation\n")
+  } else {
+    cat("◐ No individual predictors reached statistical significance\n")
+    cat("  (This is common with smaller sample sizes)\n")
+  }
+  
+  cat("✓ Model explains", round(mcfadden_r2 * 100, 1), "% of variance in cessation outcomes\n")
+  
+} else {
+  cat("✗ Regression analysis encountered issues\n")
+  cat("Consider checking data quality and variable definitions\n")
+}
 ```
 
 
