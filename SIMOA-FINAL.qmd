@@ -1187,6 +1187,7 @@ cat("\n=== ANALYSIS COMPLETE ===\n")
 This section will have 2 purposes. The first will be to confirm the results of the RFM with regression and the second purpose will be to check for other variables not included in the RFM such as experiencing AEs or other groups of variables we decided to examine (these should be based on previous research)
 
 ```{r}
+#| label: Personality
 # FIXED COMPREHENSIVE REGRESSION ANALYSIS
 # Excluding variables that are transformations of the outcome
 
@@ -1466,6 +1467,14 @@ if(exists("step_model")) {
   cat("Consider checking data quality and variable definitions\n")
 }
 ```
+
+```{r}
+#| label: Adverse Effects
+
+
+```
+
+
 
 
 ## 2.4 Personality Profiles
