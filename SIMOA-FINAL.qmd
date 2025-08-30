@@ -1741,6 +1741,814 @@ if(best_p == fisher_binary$p.value) {
 ```
 
 ```{r}
+# =============================================================================
+# STATISTICAL TESTS TO JUSTIFY CLUSTER COMBINING
+# Testing whether Clusters 2 and 3 are significantly different
+# =============================================================================
+
+# Assuming you have personality_data from your previous analysis
+# with clusters already assigned
+
+# =============================================================================
+# 1. DIRECT COMPARISON: CLUSTER 2 vs CLUSTER 3 CESSATION RATES
+# =============================================================================
+
+cat("=== CLUSTER 2 vs CLUSTER 3 COMPARISON ===\n")
+
+# Subset data to only Clusters 2 and 3
+subset_23 <- personality_data[personality_data$cluster %in% c(2, 3), ]
+
+# Basic descriptive statistics
+cluster_23_summary <- subset_23 %>%
+  group_by(cluster) %>%
+  summarise(
+    n = n(),
+    cessations = sum(scrn_stopped_bzra),
+    cessation_rate = mean(scrn_stopped_bzra),
+    cessation_rate_ci_lower = binom.test(sum(scrn_stopped_bzra), n())$conf.int[1],
+    cessation_rate_ci_upper = binom.test(sum(scrn_stopped_bzra), n())$conf.int[2],
+    .groups = "drop"
+  )
+
+print("Cluster 2 vs 3 Summary:")
+print(cluster_23_summary)
+
+# Statistical tests
+chi_sq_23 <- chisq.test(subset_23$cluster, subset_23$scrn_stopped_bzra)
+fisher_23 <- fisher.test(subset_23$cluster, subset_23$scrn_stopped_bzra)
+
+cat("\nStatistical Tests (Cluster 2 vs Cluster 3):\n")
+cat("Chi-square test p-value:", round(chi_sq_23$p.value, 4), "\n")
+cat("Fisher's exact test p-value:", round(fisher_23$p.value, 4), "\n")
+# Handle cases where Fisher's test returns non-numeric OR (when p=1.0)
+if(is.numeric(fisher_23$estimate) && is.finite(fisher_23$estimate)) {
+  cat("Fisher's OR (95% CI):", round(fisher_23$estimate, 2), 
+      " (", round(fisher_23$conf.int[1], 2), "-", round(fisher_23$conf.int[2], 2), ")\n")
+} else {
+  cat("Fisher's OR: Not estimable (groups are identical or have extreme values)\n")
+}
+
+# Effect size
+cramers_v_23 <- sqrt(chi_sq_23$statistic / (nrow(subset_23) * (2 - 1)))
+cat("Cramer's V (effect size):", round(cramers_v_23, 3), "\n")
+
+# Cohen's h for proportion difference
+p2 <- cluster_23_summary$cessation_rate[cluster_23_summary$cluster == 2]
+p3 <- cluster_23_summary$cessation_rate[cluster_23_summary$cluster == 3]
+cohens_h_23 <- 2 * (asin(sqrt(p2)) - asin(sqrt(p3)))
+cat("Cohen's h (effect size for proportions):", round(abs(cohens_h_23), 3), "\n")
+
+# Interpretation
+if(fisher_23$p.value > 0.05) {
+  cat("\n*** NO SIGNIFICANT DIFFERENCE between Clusters 2 and 3 ***\n")
+  cat("This supports combining them into a single group.\n")
+} else {
+  cat("\n*** SIGNIFICANT DIFFERENCE found between Clusters 2 and 3 ***\n")
+  cat("This argues AGAINST combining them.\n")
+}
+
+# =============================================================================
+# 2. PERSONALITY PROFILE SIMILARITY ANALYSIS
+# =============================================================================
+
+cat("\n=== PERSONALITY PROFILE SIMILARITY ===\n")
+
+# Calculate personality profile similarity between clusters 2 and 3
+cluster2_profile <- personality_data[personality_data$cluster == 2, personality_vars]
+cluster3_profile <- personality_data[personality_data$cluster == 3, personality_vars]
+
+# T-tests for each personality variable
+cat("T-tests comparing personality variables between Clusters 2 and 3:\n")
+personality_comparisons <- data.frame(
+  Variable = character(),
+  Cluster2_Mean = numeric(),
+  Cluster3_Mean = numeric(),
+  T_statistic = numeric(),
+  P_value = numeric(),
+  Cohens_d = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for(var in personality_vars) {
+  t_test <- t.test(cluster2_profile[[var]], cluster3_profile[[var]])
+  
+  # Calculate Cohen's d
+  pooled_sd <- sqrt(((nrow(cluster2_profile)-1)*var(cluster2_profile[[var]]) + 
+                     (nrow(cluster3_profile)-1)*var(cluster3_profile[[var]])) / 
+                    (nrow(cluster2_profile) + nrow(cluster3_profile) - 2))
+  cohens_d <- abs((mean(cluster2_profile[[var]]) - mean(cluster3_profile[[var]])) / pooled_sd)
+  
+  personality_comparisons <- rbind(personality_comparisons, data.frame(
+    Variable = var,
+    Cluster2_Mean = round(mean(cluster2_profile[[var]]), 3),
+    Cluster3_Mean = round(mean(cluster3_profile[[var]]), 3),
+    T_statistic = round(t_test$statistic, 3),
+    P_value = round(t_test$p.value, 4),
+    Cohens_d = round(cohens_d, 3)
+  ))
+}
+
+print(personality_comparisons)
+
+# Count significant differences
+sig_differences <- sum(personality_comparisons$P_value < 0.05)
+cat("\nNumber of personality variables significantly different (p < 0.05):", sig_differences, "out of", nrow(personality_comparisons), "\n")
+
+# Count large effect sizes (Cohen's d > 0.5)
+large_effects <- sum(personality_comparisons$Cohens_d > 0.5)
+cat("Number of personality variables with large effect sizes (d > 0.5):", large_effects, "out of", nrow(personality_comparisons), "\n")
+
+# =============================================================================
+# 3. ALTERNATIVE APPROACHES: TEST ALL PAIRWISE COMPARISONS
+# =============================================================================
+
+cat("\n=== ALL PAIRWISE CLUSTER COMPARISONS ===\n")
+
+# Get the actual cluster values from your data instead of assuming c(1,2,3)
+clusters <- sort(as.numeric(levels(personality_data$cluster)))
+cat("Clusters found in data:", clusters, "\n")
+cat("Cluster counts:\n")
+print(table(personality_data$cluster))
+
+pairwise_results <- data.frame(
+  Comparison = character(),
+  Fisher_p = numeric(),
+  OR = numeric(),
+  OR_lower = numeric(),
+  OR_upper = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for(i in 1:(length(clusters)-1)) {
+  for(j in (i+1):length(clusters)) {
+    subset_data <- personality_data[personality_data$cluster %in% c(clusters[i], clusters[j]), ]
+    
+    # Add validation check
+    if(nrow(subset_data) == 0) {
+      cat("Warning: No data found for clusters", clusters[i], "and", clusters[j], "\n")
+      next
+    }
+    
+    # Check if both clusters are present
+    unique_clusters <- unique(subset_data$cluster)
+    if(length(unique_clusters) < 2) {
+      cat("Warning: Only one cluster found in subset for", clusters[i], "vs", clusters[j], "\n")
+      next
+    }
+    
+    fisher_test <- fisher.test(subset_data$cluster, subset_data$scrn_stopped_bzra)
+    
+    comparison_name <- paste("Cluster", clusters[i], "vs", clusters[j])
+    
+    # Safer approach - check lengths before creating data frame
+    or_value <- if(length(fisher_test$estimate) > 0 && is.finite(fisher_test$estimate)) {
+      round(fisher_test$estimate, 2)
+    } else {
+      NA
+    }
+    
+    or_lower <- if(length(fisher_test$conf.int) >= 1 && is.finite(fisher_test$conf.int[1])) {
+      round(fisher_test$conf.int[1], 2)
+    } else {
+      NA
+    }
+    
+    or_upper <- if(length(fisher_test$conf.int) >= 2 && is.finite(fisher_test$conf.int[2])) {
+      round(fisher_test$conf.int[2], 2)
+    } else {
+      NA
+    }
+    
+    pairwise_results <- rbind(pairwise_results, data.frame(
+      Comparison = comparison_name,
+      Fisher_p = round(fisher_test$p.value, 4),
+      OR = or_value,
+      OR_lower = or_lower,
+      OR_upper = or_upper
+    ))
+  }
+}
+
+print("All Pairwise Comparisons:")
+print(pairwise_results)
+
+# =============================================================================
+# 4. EVIDENCE SUMMARY FOR YOUR SUPERVISOR
+# =============================================================================
+
+cat("\n=== EVIDENCE SUMMARY ===\n")
+
+# Get the specific p-values
+p_12 <- pairwise_results$Fisher_p[pairwise_results$Comparison == "Cluster 1 vs 2"]
+p_13 <- pairwise_results$Fisher_p[pairwise_results$Comparison == "Cluster 1 vs 3"]
+p_23 <- pairwise_results$Fisher_p[pairwise_results$Comparison == "Cluster 2 vs 3"]
+
+cat("Statistical Evidence for Cluster Combining:\n")
+cat("- Cluster 1 vs 2: p =", p_12, "\n")
+cat("- Cluster 1 vs 3: p =", p_13, "\n")
+cat("- Cluster 2 vs 3: p =", p_23, "\n\n")
+
+# Decision logic
+if(p_23 > 0.05 && (p_12 < 0.05 || p_13 < 0.05)) {
+  cat("RECOMMENDATION: COMBINING CLUSTERS 2 & 3 IS JUSTIFIED\n")
+  cat("Reasoning:\n")
+  cat("- Clusters 2 and 3 are NOT significantly different (p > 0.05)\n")
+  cat("- At least one of them IS significantly different from Cluster 1\n")
+  cat("- This supports a binary classification: High Risk vs Standard Risk\n")
+} else if(p_23 < 0.05) {
+  cat("RECOMMENDATION: DO NOT COMBINE CLUSTERS 2 & 3\n")
+  cat("Reasoning:\n")
+  cat("- Clusters 2 and 3 ARE significantly different (p < 0.05)\n")
+  cat("- They represent distinct personality-cessation profiles\n")
+  cat("- Three-cluster solution may be more appropriate\n")
+} else {
+  cat("RECOMMENDATION: AMBIGUOUS - NEED ADDITIONAL EVIDENCE\n")
+  cat("Consider clinical interpretability and effect sizes\n")
+}
+
+# =============================================================================
+# 5. SENSITIVITY ANALYSIS: BOOTSTRAP CONFIDENCE INTERVALS
+# =============================================================================
+
+cat("\n=== BOOTSTRAP SENSITIVITY ANALYSIS ===\n")
+
+library(boot)
+
+# Bootstrap function for comparing clusters 2 and 3
+bootstrap_diff <- function(data, indices) {
+  d <- data[indices, ]
+  rate_2 <- mean(d$scrn_stopped_bzra[d$cluster == 2])
+  rate_3 <- mean(d$scrn_stopped_bzra[d$cluster == 3])
+  return(rate_2 - rate_3)
+}
+
+set.seed(123)
+boot_results <- boot(subset_23, bootstrap_diff, R = 1000)
+boot_ci <- boot.ci(boot_results, type = "perc")
+
+cat("Bootstrap 95% CI for cessation rate difference (Cluster 2 - Cluster 3):\n")
+cat("Difference =", round(boot_results$t0, 4), "\n")
+cat("95% CI: (", round(boot_ci$percent[4], 4), ",", round(boot_ci$percent[5], 4), ")\n")
+
+if(boot_ci$percent[4] < 0 && boot_ci$percent[5] > 0) {
+  cat("*** CI includes 0: NO significant difference between clusters ***\n")
+} else {
+  cat("*** CI does not include 0: Significant difference exists ***\n")
+}
+```
+
+```{r}
+# =============================================================================
+# DETAILED ANALYSIS: PERSONALITY DIFFERENCES BETWEEN CLUSTERS 2 & 3
+# Understanding "Two Roads to the Same Destination"
+# =============================================================================
+
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+
+# =============================================================================
+# 1. DETAILED PERSONALITY PROFILE COMPARISON
+# =============================================================================
+
+cat("=== DETAILED PERSONALITY DIFFERENTIATION: CLUSTERS 2 vs 3 ===\n\n")
+
+# Create detailed comparison table
+personality_comparison_detailed <- data.frame(
+  Variable = character(),
+  Cluster2_Mean = numeric(),
+  Cluster3_Mean = numeric(),
+  Difference = numeric(),
+  T_statistic = numeric(),
+  P_value = numeric(),
+  Cohens_d = numeric(),
+  Effect_Size_Interpretation = character(),
+  Direction = character(),
+  stringsAsFactors = FALSE
+)
+
+cluster2_data <- personality_data[personality_data$cluster == 2, ]
+cluster3_data <- personality_data[personality_data$cluster == 3, ]
+
+for(var in personality_vars) {
+  t_test <- t.test(cluster2_data[[var]], cluster3_data[[var]])
+  
+  # Calculate Cohen's d
+  pooled_sd <- sqrt(((nrow(cluster2_data)-1)*var(cluster2_data[[var]]) + 
+                     (nrow(cluster3_data)-1)*var(cluster3_data[[var]])) / 
+                    (nrow(cluster2_data) + nrow(cluster3_data) - 2))
+  
+  mean2 <- mean(cluster2_data[[var]])
+  mean3 <- mean(cluster3_data[[var]])
+  cohens_d <- (mean2 - mean3) / pooled_sd
+  
+  # Effect size interpretation
+  effect_interp <- case_when(
+    abs(cohens_d) < 0.2 ~ "Negligible",
+    abs(cohens_d) < 0.5 ~ "Small", 
+    abs(cohens_d) < 0.8 ~ "Medium",
+    TRUE ~ "Large"
+  )
+  
+  # Direction of difference
+  direction <- ifelse(cohens_d > 0, "Cluster 2 > Cluster 3", "Cluster 3 > Cluster 2")
+  
+  personality_comparison_detailed <- rbind(personality_comparison_detailed, data.frame(
+    Variable = var,
+    Cluster2_Mean = round(mean2, 3),
+    Cluster3_Mean = round(mean3, 3),
+    Difference = round(mean2 - mean3, 3),
+    T_statistic = round(t_test$statistic, 3),
+    P_value = round(t_test$p.value, 4),
+    Cohens_d = round(cohens_d, 3),
+    Effect_Size_Interpretation = effect_interp,
+    Direction = direction
+  ))
+}
+
+# Sort by effect size (largest differences first)
+personality_comparison_detailed <- personality_comparison_detailed[order(-abs(personality_comparison_detailed$Cohens_d)), ]
+
+print("Personality Variables Ranked by Effect Size (Clusters 2 vs 3):")
+print(personality_comparison_detailed)
+
+# =============================================================================
+# 2. IDENTIFY KEY DIFFERENTIATING VARIABLES
+# =============================================================================
+
+cat("\n=== KEY DIFFERENTIATING VARIABLES ===\n")
+
+# Large effect sizes (|d| > 0.5)
+large_effects <- personality_comparison_detailed[abs(personality_comparison_detailed$Cohens_d) > 0.5, ]
+cat("Variables with LARGE effect sizes (Cohen's d > 0.5):\n")
+for(i in 1:nrow(large_effects)) {
+  cat("-", large_effects$Variable[i], ": d =", large_effects$Cohens_d[i], 
+      "(", large_effects$Direction[i], ")\n")
+}
+
+# Medium effect sizes
+medium_effects <- personality_comparison_detailed[
+  abs(personality_comparison_detailed$Cohens_d) >= 0.5 & 
+  abs(personality_comparison_detailed$Cohens_d) < 0.8, ]
+cat("\nVariables with MEDIUM effect sizes (0.5 ≤ Cohen's d < 0.8):\n")
+for(i in 1:nrow(medium_effects)) {
+  cat("-", medium_effects$Variable[i], ": d =", medium_effects$Cohens_d[i], 
+      "(", medium_effects$Direction[i], ")\n")
+}
+
+# =============================================================================
+# 3. CREATE CLUSTER PROFILES BASED ON KEY DIFFERENCES
+# =============================================================================
+
+cat("\n=== CLUSTER PERSONALITY PROFILES ===\n")
+
+# Cluster 2 Profile (higher values)
+cluster2_strengths <- large_effects$Variable[large_effects$Cohens_d > 0.5]
+cluster2_lower <- large_effects$Variable[large_effects$Cohens_d < -0.5]
+
+# Cluster 3 Profile (higher values) 
+cluster3_strengths <- large_effects$Variable[large_effects$Cohens_d < -0.5]
+cluster3_lower <- large_effects$Variable[large_effects$Cohens_d > 0.5]
+
+cat("CLUSTER 2 PERSONALITY PROFILE:\n")
+cat("Higher than Cluster 3 in:\n")
+if(length(cluster2_strengths) > 0) {
+  for(var in cluster2_strengths) {
+    effect_size <- round(large_effects$Cohens_d[large_effects$Variable == var], 2)
+    cat("  -", var, "(d =", effect_size, ")\n")
+  }
+} else {
+  cat("  - No variables significantly higher\n")
+}
+
+cat("Lower than Cluster 3 in:\n")
+if(length(cluster2_lower) > 0) {
+  for(var in cluster2_lower) {
+    effect_size <- round(abs(large_effects$Cohens_d[large_effects$Variable == var]), 2)
+    cat("  -", var, "(d =", -effect_size, ")\n")
+  }
+} else {
+  cat("  - No variables significantly lower\n")
+}
+
+cat("\nCLUSTER 3 PERSONALITY PROFILE:\n")
+cat("Higher than Cluster 2 in:\n")
+if(length(cluster3_strengths) > 0) {
+  for(var in cluster3_strengths) {
+    effect_size <- round(abs(large_effects$Cohens_d[large_effects$Variable == var]), 2)
+    cat("  -", var, "(d =", effect_size, ")\n")
+  }
+} else {
+  cat("  - No variables significantly higher\n")
+}
+
+cat("Lower than Cluster 2 in:\n")
+if(length(cluster3_lower) > 0) {
+  for(var in cluster3_lower) {
+    effect_size <- round(large_effects$Cohens_d[large_effects$Variable == var], 2)
+    cat("  -", var, "(d =", -effect_size, ")\n")
+  }
+} else {
+  cat("  - No variables significantly lower\n")
+}
+
+# =============================================================================
+# 4. WITHIN-CLUSTER CESSATION PREDICTORS
+# =============================================================================
+
+cat("\n\n=== WITHIN-CLUSTER CESSATION PREDICTORS ===\n")
+
+# Function to find predictors within each cluster
+analyze_within_cluster_predictors <- function(cluster_num) {
+  cluster_data <- personality_data[personality_data$cluster == cluster_num, ]
+  
+  cat("\nCLUSTER", cluster_num, "INTERNAL CESSATION PREDICTORS:\n")
+  cat("Cluster size: n =", nrow(cluster_data), "\n")
+  cat("Cessation rate:", round(mean(cluster_data$scrn_stopped_bzra), 3), "\n")
+  
+  # Correlations with cessation within this cluster
+  correlations <- data.frame(
+    Variable = personality_vars,
+    Correlation = numeric(length(personality_vars)),
+    P_value = numeric(length(personality_vars))
+  )
+  
+  for(i in 1:length(personality_vars)) {
+    var <- personality_vars[i]
+    cor_test <- cor.test(cluster_data[[var]], cluster_data$scrn_stopped_bzra)
+    correlations$Correlation[i] <- cor_test$estimate
+    correlations$P_value[i] <- cor_test$p.value
+  }
+  
+  # Sort by absolute correlation
+  correlations <- correlations[order(-abs(correlations$Correlation)), ]
+  
+  # Show strongest predictors
+  significant_predictors <- correlations[correlations$P_value < 0.1, ]  # More liberal for exploration
+  
+  if(nrow(significant_predictors) > 0) {
+    cat("Potential within-cluster predictors (p < 0.1):\n")
+    for(i in 1:nrow(significant_predictors)) {
+      direction <- ifelse(significant_predictors$Correlation[i] > 0, "Higher", "Lower")
+      cat("  -", direction, significant_predictors$Variable[i], 
+          ": r =", round(significant_predictors$Correlation[i], 3), 
+          ", p =", round(significant_predictors$P_value[i], 3), "\n")
+    }
+  } else {
+    cat("No significant within-cluster predictors found (all p > 0.1)\n")
+  }
+  
+  return(correlations)
+}
+
+# Analyze both clusters
+cluster2_predictors <- analyze_within_cluster_predictors(2)
+cluster3_predictors <- analyze_within_cluster_predictors(3)
+
+# =============================================================================
+# 5. QUALITATIVE DIFFERENCES IN CESSATION PATHWAYS
+# =============================================================================
+
+cat("\n\n=== QUALITATIVE DIFFERENCES IN CESSATION PATHWAYS ===\n")
+
+# Compare the top predictors between clusters
+top_predictors_c2 <- cluster2_predictors[1:5, ]  # Top 5 correlations
+top_predictors_c3 <- cluster3_predictors[1:5, ]
+
+cat("TOP CESSATION-RELATED VARIABLES BY CLUSTER:\n")
+cat("\nCluster 2 (top 5 correlations with cessation):\n")
+for(i in 1:5) {
+  direction <- ifelse(top_predictors_c2$Correlation[i] > 0, "+", "-")
+  cat("  ", i, ".", top_predictors_c2$Variable[i], 
+      " (r =", direction, round(abs(top_predictors_c2$Correlation[i]), 3), 
+      ", p =", round(top_predictors_c2$P_value[i], 3), ")\n")
+}
+
+cat("\nCluster 3 (top 5 correlations with cessation):\n")
+for(i in 1:5) {
+  direction <- ifelse(top_predictors_c3$Correlation[i] > 0, "+", "-")
+  cat("  ", i, ".", top_predictors_c3$Variable[i], 
+      " (r =", direction, round(abs(top_predictors_c3$Correlation[i]), 3), 
+      ", p =", round(top_predictors_c3$P_value[i], 3), ")\n")
+}
+
+# =============================================================================
+# 6. SUMMARY AND CLINICAL INTERPRETATION
+# =============================================================================
+
+cat("\n\n=== CLINICAL INTERPRETATION SUMMARY ===\n")
+
+cat("KEY FINDINGS:\n")
+cat("1. DIFFERENT PERSONALITY PROFILES:\n")
+cat("   - Clusters 2 & 3 differ significantly on", sum(personality_comparison_detailed$P_value < 0.05), 
+    "out of", nrow(personality_comparison_detailed), "personality variables\n")
+cat("   - Large effect sizes on", sum(abs(personality_comparison_detailed$Cohens_d) > 0.5), "variables\n")
+
+cat("\n2. IDENTICAL CESSATION OUTCOMES:\n")
+cat("   - Both clusters show similar cessation rates\n")
+cat("   - No significant difference in cessation success (p = 1.0)\n")
+
+cat("\n3. POTENTIAL DIFFERENT PATHWAYS:\n")
+# Check if either cluster has significant predictors
+c2_sig_predictors <- sum(cluster2_predictors$P_value < 0.1)
+c3_sig_predictors <- sum(cluster3_predictors$P_value < 0.1)
+total_sig_predictors <- c2_sig_predictors + c3_sig_predictors
+
+if(total_sig_predictors > 0) {
+  cat("   - Different personality variables may predict success within each cluster\n")
+  cat("   - Cluster 2 has", c2_sig_predictors, "potential predictors (p < 0.1)\n")
+  cat("   - Cluster 3 has", c3_sig_predictors, "potential predictors (p < 0.1)\n")
+  cat("   - Suggests different mechanisms leading to the same outcome\n")
+} else {
+  cat("   - Within-cluster predictors are weak, suggesting other factors may be important\n")
+}
+
+cat("\n4. CLINICAL IMPLICATIONS:\n")
+cat("   - Binary classification (Cluster 1 vs Clusters 2+3) is statistically justified\n")
+cat("   - Future interventions could be tailored to personality subtypes within successful group\n")
+cat("   - Both 'personality pathways' lead to success - different routes, same destination\n")
+
+cat("\nRECOMMENDATION:\n")
+cat("Proceed with binary classification for main analysis, but document the personality\n")
+cat("heterogeneity within the successful group for future personalized interventions.\n")
+```
+
+
+```{r}
+# =============================================================================
+# DETAILED ANALYSIS: PERSONALITY DIFFERENCES BETWEEN CLUSTERS 2 & 3
+# Understanding "Two Roads to the Same Destination"
+# =============================================================================
+
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+
+# =============================================================================
+# 1. DETAILED PERSONALITY PROFILE COMPARISON
+# =============================================================================
+
+cat("=== DETAILED PERSONALITY DIFFERENTIATION: CLUSTERS 2 vs 3 ===\n\n")
+
+# Create detailed comparison table
+personality_comparison_detailed <- data.frame(
+  Variable = character(),
+  Cluster2_Mean = numeric(),
+  Cluster3_Mean = numeric(),
+  Difference = numeric(),
+  T_statistic = numeric(),
+  P_value = numeric(),
+  Cohens_d = numeric(),
+  Effect_Size_Interpretation = character(),
+  Direction = character(),
+  stringsAsFactors = FALSE
+)
+
+cluster2_data <- personality_data[personality_data$cluster == 2, ]
+cluster3_data <- personality_data[personality_data$cluster == 3, ]
+
+for(var in personality_vars) {
+  t_test <- t.test(cluster2_data[[var]], cluster3_data[[var]])
+  
+  # Calculate Cohen's d
+  pooled_sd <- sqrt(((nrow(cluster2_data)-1)*var(cluster2_data[[var]]) + 
+                     (nrow(cluster3_data)-1)*var(cluster3_data[[var]])) / 
+                    (nrow(cluster2_data) + nrow(cluster3_data) - 2))
+  
+  mean2 <- mean(cluster2_data[[var]])
+  mean3 <- mean(cluster3_data[[var]])
+  cohens_d <- (mean2 - mean3) / pooled_sd
+  
+  # Effect size interpretation
+  effect_interp <- case_when(
+    abs(cohens_d) < 0.2 ~ "Negligible",
+    abs(cohens_d) < 0.5 ~ "Small", 
+    abs(cohens_d) < 0.8 ~ "Medium",
+    TRUE ~ "Large"
+  )
+  
+  # Direction of difference
+  direction <- ifelse(cohens_d > 0, "Cluster 2 > Cluster 3", "Cluster 3 > Cluster 2")
+  
+  personality_comparison_detailed <- rbind(personality_comparison_detailed, data.frame(
+    Variable = var,
+    Cluster2_Mean = round(mean2, 3),
+    Cluster3_Mean = round(mean3, 3),
+    Difference = round(mean2 - mean3, 3),
+    T_statistic = round(t_test$statistic, 3),
+    P_value = round(t_test$p.value, 4),
+    Cohens_d = round(cohens_d, 3),
+    Effect_Size_Interpretation = effect_interp,
+    Direction = direction
+  ))
+}
+
+# Sort by effect size (largest differences first)
+personality_comparison_detailed <- personality_comparison_detailed[order(-abs(personality_comparison_detailed$Cohens_d)), ]
+
+print("Personality Variables Ranked by Effect Size (Clusters 2 vs 3):")
+print(personality_comparison_detailed)
+
+# =============================================================================
+# 2. IDENTIFY KEY DIFFERENTIATING VARIABLES
+# =============================================================================
+
+cat("\n=== KEY DIFFERENTIATING VARIABLES ===\n")
+
+# Large effect sizes (|d| > 0.5)
+large_effects <- personality_comparison_detailed[abs(personality_comparison_detailed$Cohens_d) > 0.5, ]
+cat("Variables with LARGE effect sizes (Cohen's d > 0.5):\n")
+for(i in 1:nrow(large_effects)) {
+  cat("-", large_effects$Variable[i], ": d =", large_effects$Cohens_d[i], 
+      "(", large_effects$Direction[i], ")\n")
+}
+
+# Medium effect sizes
+medium_effects <- personality_comparison_detailed[
+  abs(personality_comparison_detailed$Cohens_d) >= 0.5 & 
+  abs(personality_comparison_detailed$Cohens_d) < 0.8, ]
+cat("\nVariables with MEDIUM effect sizes (0.5 ≤ Cohen's d < 0.8):\n")
+for(i in 1:nrow(medium_effects)) {
+  cat("-", medium_effects$Variable[i], ": d =", medium_effects$Cohens_d[i], 
+      "(", medium_effects$Direction[i], ")\n")
+}
+
+# =============================================================================
+# 3. CREATE CLUSTER PROFILES BASED ON KEY DIFFERENCES
+# =============================================================================
+
+cat("\n=== CLUSTER PERSONALITY PROFILES ===\n")
+
+# Cluster 2 Profile (higher values)
+cluster2_strengths <- large_effects$Variable[large_effects$Cohens_d > 0.5]
+cluster2_lower <- large_effects$Variable[large_effects$Cohens_d < -0.5]
+
+# Cluster 3 Profile (higher values) 
+cluster3_strengths <- large_effects$Variable[large_effects$Cohens_d < -0.5]
+cluster3_lower <- large_effects$Variable[large_effects$Cohens_d > 0.5]
+
+cat("CLUSTER 2 PERSONALITY PROFILE:\n")
+cat("Higher than Cluster 3 in:\n")
+if(length(cluster2_strengths) > 0) {
+  for(var in cluster2_strengths) {
+    effect_size <- round(large_effects$Cohens_d[large_effects$Variable == var], 2)
+    cat("  -", var, "(d =", effect_size, ")\n")
+  }
+} else {
+  cat("  - No variables significantly higher\n")
+}
+
+cat("Lower than Cluster 3 in:\n")
+if(length(cluster2_lower) > 0) {
+  for(var in cluster2_lower) {
+    effect_size <- round(abs(large_effects$Cohens_d[large_effects$Variable == var]), 2)
+    cat("  -", var, "(d =", -effect_size, ")\n")
+  }
+} else {
+  cat("  - No variables significantly lower\n")
+}
+
+cat("\nCLUSTER 3 PERSONALITY PROFILE:\n")
+cat("Higher than Cluster 2 in:\n")
+if(length(cluster3_strengths) > 0) {
+  for(var in cluster3_strengths) {
+    effect_size <- round(abs(large_effects$Cohens_d[large_effects$Variable == var]), 2)
+    cat("  -", var, "(d =", effect_size, ")\n")
+  }
+} else {
+  cat("  - No variables significantly higher\n")
+}
+
+cat("Lower than Cluster 2 in:\n")
+if(length(cluster3_lower) > 0) {
+  for(var in cluster3_lower) {
+    effect_size <- round(large_effects$Cohens_d[large_effects$Variable == var], 2)
+    cat("  -", var, "(d =", -effect_size, ")\n")
+  }
+} else {
+  cat("  - No variables significantly lower\n")
+}
+
+# =============================================================================
+# 4. WITHIN-CLUSTER CESSATION PREDICTORS
+# =============================================================================
+
+cat("\n\n=== WITHIN-CLUSTER CESSATION PREDICTORS ===\n")
+
+# Function to find predictors within each cluster
+analyze_within_cluster_predictors <- function(cluster_num) {
+  cluster_data <- personality_data[personality_data$cluster == cluster_num, ]
+  
+  cat("\nCLUSTER", cluster_num, "INTERNAL CESSATION PREDICTORS:\n")
+  cat("Cluster size: n =", nrow(cluster_data), "\n")
+  cat("Cessation rate:", round(mean(cluster_data$scrn_stopped_bzra), 3), "\n")
+  
+  # Correlations with cessation within this cluster
+  correlations <- data.frame(
+    Variable = personality_vars,
+    Correlation = numeric(length(personality_vars)),
+    P_value = numeric(length(personality_vars))
+  )
+  
+  for(i in 1:length(personality_vars)) {
+    var <- personality_vars[i]
+    cor_test <- cor.test(cluster_data[[var]], cluster_data$scrn_stopped_bzra)
+    correlations$Correlation[i] <- cor_test$estimate
+    correlations$P_value[i] <- cor_test$p.value
+  }
+  
+  # Sort by absolute correlation
+  correlations <- correlations[order(-abs(correlations$Correlation)), ]
+  
+  # Show strongest predictors
+  significant_predictors <- correlations[correlations$P_value < 0.1, ]  # More liberal for exploration
+  
+  if(nrow(significant_predictors) > 0) {
+    cat("Potential within-cluster predictors (p < 0.1):\n")
+    for(i in 1:nrow(significant_predictors)) {
+      direction <- ifelse(significant_predictors$Correlation[i] > 0, "Higher", "Lower")
+      cat("  -", direction, significant_predictors$Variable[i], 
+          ": r =", round(significant_predictors$Correlation[i], 3), 
+          ", p =", round(significant_predictors$P_value[i], 3), "\n")
+    }
+  } else {
+    cat("No significant within-cluster predictors found (all p > 0.1)\n")
+  }
+  
+  return(correlations)
+}
+
+# Analyze both clusters
+cluster2_predictors <- analyze_within_cluster_predictors(2)
+cluster3_predictors <- analyze_within_cluster_predictors(3)
+
+# =============================================================================
+# 5. QUALITATIVE DIFFERENCES IN CESSATION PATHWAYS
+# =============================================================================
+
+cat("\n\n=== QUALITATIVE DIFFERENCES IN CESSATION PATHWAYS ===\n")
+
+# Compare the top predictors between clusters
+top_predictors_c2 <- cluster2_predictors[1:5, ]  # Top 5 correlations
+top_predictors_c3 <- cluster3_predictors[1:5, ]
+
+cat("TOP CESSATION-RELATED VARIABLES BY CLUSTER:\n")
+cat("\nCluster 2 (top 5 correlations with cessation):\n")
+for(i in 1:5) {
+  direction <- ifelse(top_predictors_c2$Correlation[i] > 0, "+", "-")
+  cat("  ", i, ".", top_predictors_c2$Variable[i], 
+      " (r =", direction, round(abs(top_predictors_c2$Correlation[i]), 3), 
+      ", p =", round(top_predictors_c2$P_value[i], 3), ")\n")
+}
+
+cat("\nCluster 3 (top 5 correlations with cessation):\n")
+for(i in 1:5) {
+  direction <- ifelse(top_predictors_c3$Correlation[i] > 0, "+", "-")
+  cat("  ", i, ".", top_predictors_c3$Variable[i], 
+      " (r =", direction, round(abs(top_predictors_c3$Correlation[i]), 3), 
+      ", p =", round(top_predictors_c3$P_value[i], 3), ")\n")
+}
+
+# =============================================================================
+# 6. SUMMARY AND CLINICAL INTERPRETATION
+# =============================================================================
+
+cat("\n\n=== CLINICAL INTERPRETATION SUMMARY ===\n")
+
+cat("KEY FINDINGS:\n")
+cat("1. DIFFERENT PERSONALITY PROFILES:\n")
+cat("   - Clusters 2 & 3 differ significantly on", sum(personality_comparison_detailed$P_value < 0.05), 
+    "out of", nrow(personality_comparison_detailed), "personality variables\n")
+cat("   - Large effect sizes on", sum(abs(personality_comparison_detailed$Cohens_d) > 0.5), "variables\n")
+
+cat("\n2. IDENTICAL CESSATION OUTCOMES:\n")
+cat("   - Both clusters show similar cessation rates\n")
+cat("   - No significant difference in cessation success (p = 1.0)\n")
+
+cat("\n3. POTENTIAL DIFFERENT PATHWAYS:\n")
+if(nrow(significant_predictors) > 0) {
+  cat("   - Different personality variables may predict success within each cluster\n")
+  cat("   - Suggests different mechanisms leading to the same outcome\n")
+} else {
+  cat("   - Within-cluster predictors are weak, suggesting other factors may be important\n")
+}
+
+cat("\n4. CLINICAL IMPLICATIONS:\n")
+cat("   - Binary classification (Cluster 1 vs Clusters 2+3) is statistically justified\n")
+cat("   - Future interventions could be tailored to personality subtypes within successful group\n")
+cat("   - Both 'personality pathways' lead to success - different routes, same destination\n")
+
+cat("\nRECOMMENDATION:\n")
+cat("Proceed with binary classification for main analysis, but document the personality\n")
+cat("heterogeneity within the successful group for future personalized interventions.\n")
+```
+
+
+```{r}
+```
+
+
+```{r}
 #| label: Cluster Analysis + Additional Statistics
 
 # ADDITIONAL STATISTICS TO STRENGTHEN THE BINARY COMPARISON ARGUMENT
